@@ -1,11 +1,12 @@
 import { createRuntime } from "./runtime.js";
-import { LiveProvider, DEFAULT_CRITIC_MODEL } from "./providers.js";
+import { LiveProvider, DEFAULT_CRITIC_MODEL, isSecurePageContext as credentialsAllowedHere } from "./providers.js";
 
 const credentials = { openrouterKey: "", criticMode: "unconfigured" };
+const HTTPS_REQUIRED = "Open NZT-49 over HTTPS to enter an API key or run live models. Demo and saved runs remain available.";
 function getLiveSettings() {
   return {
-    critic_ready: credentials.criticMode === "openrouter" && Boolean(credentials.openrouterKey),
-    critic_status: credentials.criticMode !== "openrouter" ? "Astra access selection" : "OpenRouter key",
+    critic_ready: credentialsAllowedHere() && credentials.criticMode === "openrouter" && Boolean(credentials.openrouterKey),
+    critic_status: !credentialsAllowedHere() ? HTTPS_REQUIRED : credentials.criticMode !== "openrouter" ? "Astra access selection" : "OpenRouter key",
     critic_model: DEFAULT_CRITIC_MODEL,
     critic_backend: "openrouter",
     openrouter_key: Boolean(credentials.openrouterKey),
@@ -21,7 +22,7 @@ const runtimeReady = createRuntime({
   providerFactory: requestHook => new LiveProvider(requestHook, {
     openrouterKey: credentials.openrouterKey,
     criticModel: DEFAULT_CRITIC_MODEL,
-    astraEnabled: credentials.criticMode === "openrouter",
+    astraEnabled: credentialsAllowedHere() && credentials.criticMode === "openrouter",
   }),
   getLiveSettings,
 }).then(value => { runtime = value; return value; });
@@ -126,18 +127,26 @@ function credentialChangeBlocked() {
 
 function renderCredentialControl() {
   const blocked = credentialChangeBlocked();
+  const insecure = !credentialsAllowedHere();
   const input = $("#openrouter-key");
   const button = $("#use-openrouter-key");
-  input.disabled = state.credentialSaving || blocked;
-  button.disabled = state.credentialSaving || blocked || !input.value.trim();
+  if (insecure) { input.value = ""; credentials.openrouterKey = ""; }
+  input.disabled = insecure || state.credentialSaving || blocked;
+  button.disabled = insecure || state.credentialSaving || blocked || !input.value.trim();
   button.textContent = "Use key in this tab";
-  button.title = blocked ? "Wait for the current run to finish before changing credentials." : "Use this key until this tab is reloaded or closed";
-  $("#critic-mode").disabled = state.credentialSaving || blocked;
+  button.title = insecure ? HTTPS_REQUIRED : blocked ? "Wait for the current run to finish before changing credentials." : "Use this key until this tab is reloaded or closed";
+  $("#critic-mode").disabled = insecure || state.credentialSaving || blocked;
+  $("#openrouter-key-help").textContent = insecure ? HTTPS_REQUIRED : "Kept only in this tab’s memory. Requests go directly to OpenRouter. Reloading clears the key.";
 }
 
 async function useOpenRouterKey() {
   if (state.credentialSaving) return;
   showError("#openrouter-key-error", null);
+  if (!credentialsAllowedHere()) {
+    renderCredentialControl();
+    showError("#openrouter-key-error", HTTPS_REQUIRED);
+    return;
+  }
   if (credentialChangeBlocked()) {
     showError("#openrouter-key-error", "Wait for the current run to finish before changing credentials.");
     return;
@@ -161,7 +170,7 @@ async function useOpenRouterKey() {
 }
 
 function liveReady() {
-  if (!state.live.critic_ready) return false;
+  if (!credentialsAllowedHere() || !state.live.critic_ready) return false;
   try {
     const endpoint = new URL($("#base-url").value);
     return endpoint.hostname !== "openrouter.ai" || Boolean(state.live.base_key || state.live.openrouter_key);
@@ -174,10 +183,10 @@ function renderModelConfig() {
   const missing = [];
   if (credentials.criticMode !== "openrouter") missing.push("Astra access selection");
   if (!state.live.base_key && !state.live.openrouter_key && $("#base-url").value.includes("openrouter.ai")) missing.push("OpenRouter key");
-  $("#model-status").textContent = !liveReady() ? `Missing: ${missing.join(" and ") || "model credentials"}.` : $("#base-model").value ? "Ready." : "Enter a continuation model ID.";
+  $("#model-status").textContent = !credentialsAllowedHere() ? HTTPS_REQUIRED : !liveReady() ? `Missing: ${missing.join(" and ") || "model credentials"}.` : $("#base-model").value ? "Ready." : "Enter a continuation model ID.";
   $("#connection-dot").classList.toggle("ready", liveReady());
   $("#run-live").disabled = state.busy || state.credentialSaving || !liveReady();
-  $("#run-live").title = missing.length ? missing.join(". ") : "Start with Astra and the selected continuation model";
+  $("#run-live").title = !credentialsAllowedHere() ? HTTPS_REQUIRED : missing.length ? missing.join(". ") : "Start with Astra and the selected continuation model";
   renderCredentialControl();
 }
 
@@ -201,6 +210,7 @@ async function refreshHistory() {
 
 async function startRun(mode) {
   if (state.busy || state.credentialSaving) return;
+  if (mode === "live" && !credentialsAllowedHere()) { showError("#form-error", HTTPS_REQUIRED); return; }
   if (!$("#experiment-form").reportValidity()) return;
   const config = configFromForm();
   const error = validateConfig(config);
@@ -327,7 +337,8 @@ function renderFinalReviewControls() {
   $("#final-review-controls").hidden = hidden;
   const button = $("#review-final-drafts");
   button.hidden = hidden;
-  button.disabled = starting || state.credentialSaving;
+  button.disabled = starting || state.credentialSaving || (run.mode === "live" && !credentialsAllowedHere());
+  button.title = run.mode === "live" && !credentialsAllowedHere() ? HTTPS_REQUIRED : "";
   button.textContent = starting ? "Starting review…" : "Review final drafts";
   const calls = $("#review-max-calls");
   const tokens = $("#review-max-output-tokens");
@@ -402,6 +413,7 @@ function renderBestIdeas() {
 
 async function startFinalReview() {
   const id = state.run?.id;
+  if (state.run?.mode === "live" && !credentialsAllowedHere()) { showError("#final-review-error", HTTPS_REQUIRED); return; }
   if (!id || state.reviewStarting || state.credentialSaving || !canReviewFinalDrafts()) return;
   const limits = {};
   for (const [key, selector, label, minimum, maximum] of [
@@ -642,6 +654,7 @@ $("#openrouter-key").addEventListener("input", () => { showError("#openrouter-ke
 $("#openrouter-key").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); useOpenRouterKey(); } });
 $("#review-final-drafts").addEventListener("click", startFinalReview);
 $("#critic-mode").addEventListener("change", event => {
+  if (!credentialsAllowedHere()) { event.target.value = "unconfigured"; credentials.criticMode = "unconfigured"; state.live = getLiveSettings(); renderModelConfig(); return; }
   if (credentialChangeBlocked()) { event.target.value = credentials.criticMode; return; }
   credentials.criticMode = event.target.value === "openrouter" ? "openrouter" : "unconfigured";
   state.live = getLiveSettings();
@@ -677,6 +690,7 @@ window.addEventListener("beforeunload", event => {
 
 async function initialize() {
   updateFormLabels();
+  renderModelConfig();
   const results = await Promise.allSettled([api("/api/config"), refreshHistory()]);
   const configResult = results[0];
   if (configResult.status === "fulfilled") { state.defaults = configResult.value.defaults; state.live = configResult.value.live || {}; applyConfig(state.defaults); renderModelConfig(); }

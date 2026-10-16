@@ -2,7 +2,7 @@
 
 A browser app for exploring macrostrategy ideas through branching synthetic posts. Astra proposes diverse titles, an OpenRouter model generates continuations, and Astra prunes branches, reviews complete drafts, and summarizes the best ideas.
 
-**Open the app:** https://luke-marks0.github.io/nzt-49/
+**App address:** https://nzt-49.lukemarks.bot/ (DNS and HTTPS setup pending).
 
 ## Use
 
@@ -47,5 +47,7 @@ python3 -m http.server 8766 --directory docs --bind 127.0.0.1
 ```
 
 GitHub Pages publishes the `main` branch's `/docs` folder. Assets use relative paths to work at `/nzt-49/`. The `.nojekyll` file disables Jekyll processing.
+
+The dedicated domain requires a `CNAME` DNS record for `nzt-49.lukemarks.bot` pointing to `luke-marks0.github.io`. Enable HTTPS in the repository's Pages settings after GitHub issues the certificate. Live API access is disabled on public HTTP pages; loopback HTTP is supported for local development.
 
 Astra access uses [OpenRouter's Astra endpoint](https://openrouter.ai/openai/gpt-6-astra). Subscription-backed OpenAI sign-in currently has [local callback requirements](https://developers.openai.com/siwc/token-sharing-open-source/sign-in); this static app does not claim to provide that flow.

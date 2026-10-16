@@ -7,6 +7,9 @@ export class ProviderError extends Error { constructor(message) { super(message)
 const fail = message => { throw new ProviderError(message); };
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const nonempty = value => typeof value === 'string' && value.trim().length > 0;
+export function isSecurePageContext(page = globalThis.location) {
+  return !page || page.protocol === 'https:' || (page.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]', '::1'].includes(page.hostname));
+}
 const strings = (value, required = false, unique = false) => Array.isArray(value) && (!required || value.length > 0) && value.every(nonempty) && (!unique || new Set(value).size === value.length);
 function exact(value, keys) {
   if (!object(value) || Object.keys(value).length !== keys.length || keys.some(key => !Object.hasOwn(value, key))) fail('Astra returned an unexpected structured result.');
@@ -30,6 +33,7 @@ export function continuationEndpoint(config) {
 export class LiveProvider {
   #key;
   constructor(requestHook, { openrouterKey, criticModel = DEFAULT_CRITIC_MODEL, astraEnabled = false, fetchImpl = globalThis.fetch } = {}) {
+    if (!isSecurePageContext()) fail('Open NZT-49 over HTTPS before using an API key.');
     if (typeof openrouterKey !== 'string' || !/^[\x21-\x7e]{1,512}$/.test(openrouterKey)) fail('Enter an OpenRouter key for this tab.');
     if (criticModel !== DEFAULT_CRITIC_MODEL) fail('This experiment uses the explicitly selected Astra model.');
     this.#key = openrouterKey;
@@ -44,6 +48,7 @@ export class LiveProvider {
     if (!this.astraEnabled) fail('Enable paid Astra through OpenRouter before starting a live run.');
   }
   async http(url, payload) {
+    if (!isSecurePageContext()) fail('Open NZT-49 over HTTPS before using an API key.');
     if (new URL(url).origin !== 'https://openrouter.ai') fail('The key can only be sent to OpenRouter.');
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 180000);

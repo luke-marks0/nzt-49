@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {LiveProvider,continuationEndpoint,DEFAULT_CRITIC_MODEL} from '../docs/providers.js';
+import {LiveProvider,continuationEndpoint,DEFAULT_CRITIC_MODEL,isSecurePageContext} from '../docs/providers.js';
 
 const key = 'fixture-key-not-a-credential';
 const config = {concept:'A test concept',base_model:'fixture/model',base_url:'https://openrouter.ai/api/v1',base_api:'openrouter',base_reasoning:'off',chunk_tokens:320};
@@ -13,6 +13,20 @@ function setup(data, options={}) {
   return {provider,calls,records};
 }
 const response = content => ({choices:[{finish_reason:'stop',message:{content:JSON.stringify(content)}}],usage:{prompt_tokens:10,completion_tokens:20}});
+
+test('API keys require HTTPS except for exact loopback development hosts', () => {
+  assert.equal(isSecurePageContext(new URL('https://nzt-49.lukemarks.bot')), true);
+  for (const host of ['localhost','127.0.0.1','[::1]']) assert.equal(isSecurePageContext(new URL('http://' + host + ':8766')), true);
+  for (const url of ['http://nzt-49.lukemarks.bot','http://localhost.evil.test','file:///index.html']) assert.equal(isSecurePageContext(new URL(url)), false);
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'location');
+  try {
+    Object.defineProperty(globalThis, 'location', {value: new URL('http://nzt-49.lukemarks.bot'), configurable: true});
+    assert.throws(() => setup({}), /over HTTPS/);
+  } finally {
+    if (previous) Object.defineProperty(globalThis, 'location', previous);
+    else delete globalThis.location;
+  }
+});
 
 test('key only goes in OpenRouter headers, never recorded request',async()=>{
   const {provider,calls,records}=setup({choices:[{finish_reason:'length',text:' continuation'}]});
