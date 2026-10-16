@@ -1,3 +1,5 @@
+import {seededRandom} from "../../docs/random.js";
+
 // Canned fixtures only: no model calls or historical user data.
 export const MECHANISMS = [
   ["Buying Time on the Compute Frontier", "compute capacity", "Purchase compute and power contracts that remain useful under several AI timelines.", "The bottleneck may be safe deployment rather than FLOPs. Additional capacity can accelerate actors with conflicting objectives."],
@@ -11,8 +13,7 @@ export const MECHANISMS = [
   ["What Would Count as Enough Evidence to Spend a Trillion?", "measurement", "Buy experiments that can change the next large allocation decision before buying its final deployment.", "Easy-to-measure proxies can crowd out the harder outcomes the experiment was meant to improve."],
   ["The Last Dollar and the Next Civilization", "intergenerational allocation", "Compare present interventions with resources held for future agents under explicit discount and survival assumptions.", "Patient capital can disappear through institutional drift long before its intended beneficiaries arrive."],
 ];
-export function seededRandom(seed) { let state = seed >>> 0; return () => { state += 0x6D2B79F5; let x = state; x = Math.imul(x ^ x >>> 15, x | 1); x ^= x + Math.imul(x ^ x >>> 7, x | 61); return ((x ^ x >>> 14) >>> 0) / 4294967296; }; }
-export class DemoProvider {
+export class FixtureProvider {
   constructor(requestHook) { this.request = requestHook; }
   async call(data, role, cap) { return (await this.request({demo_fixture: true, max_tokens: cap}, role, async () => ({data, usage: {input_tokens: 0, output_tokens: 0}}))).data; }
   async titles(config, requested) { return this.call(requested.map((assignment, batchIndex) => { const i = (config._previous_titles || []).length + batchIndex; const [title,lens] = MECHANISMS[i % MECHANISMS.length]; return {...assignment, title: title + (i >= 10 ? ` · variation ${Math.floor(i/10)+1}` : ""), lens}; }), "critic", 8192); }

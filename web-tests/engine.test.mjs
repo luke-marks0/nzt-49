@@ -2,10 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {Engine, pathText, exportMarkdown, select, reviewBatches} from "../docs/engine.js";
 import {DEFAULTS, DEFAULT_BASE_MODEL, TINKER_API_BASE, validate, migrateGenerationConfig, estimate, assignments} from "../docs/config.js";
-import {DemoProvider} from "../docs/demo.js";
+import {FixtureProvider} from "./helpers/fixture-provider.mjs";
 
 const small = {title_count:1,branch_factor:1,depth:1};
-class RecordingProvider extends DemoProvider {
+class RecordingProvider extends FixtureProvider {
   constructor(hook) { super(hook); this.titleInputs=[]; this.prefixes=[]; this.ratings=[]; this.posts=[]; this.notes=[]; }
   async titles(config, requested) { this.titleInputs.push(structuredClone({config,requested})); return super.titles(config,requested); }
   async continue_post(config,title,prefix,temperature,seed) { this.prefixes.push({title,prefix,temperature,seed}); return this.call({text:` [${title.id}:${seed}] `,finish_reason:this.finishReason||"length"},"base",config.chunk_tokens); }
@@ -36,9 +36,21 @@ test("configuration rejects non-finite parameters, unsafe URLs, and unexpected c
   for(const bad of [{seed:true},{temperatures:[NaN]},{depth:0},{base_url:"https://user:pass@example.com"},{base_url:"http://example.com"},{base_url:"https://example.com/?key=value"},{api_key:"private"},{title_count:200,title_mode:"per_author"}]) assert.throws(()=>validate(bad));
   assert.equal(validate({base_url:"http://127.0.0.1:8080"}).base_url,"http://127.0.0.1:8080");
 });
-test("demo completes final review and summary without network access",async()=>{
-  const engine=new Engine(small),state=await engine.run(); assert.equal(state.status,"completed"); assert.equal(state.final_review.status,"completed"); assert.ok(state.final_review.summary.ideas.length); assert.equal(state.usage.calls,5); assert.ok(state.requests.every(r=>r.request.demo_fixture));
-  const markdown=exportMarkdown(state); assert.match(markdown,/OFFLINE DEMO/); assert.match(markdown,/## Best ideas/); assert.match(markdown,/Source paths: node-1/); assert.match(markdown,/Partial draft/);
+test("new runs require a live provider and reject demo generation before any side effects",()=>{
+  let providers=0,saves=0;
+  assert.throws(()=>new Engine(small),/configured model provider/);
+  for(const mode of ["demo","unknown",null]) assert.throws(()=>new Engine(small,{mode,providerFactory:()=>{providers++;},onSave:async()=>{saves++;}}),/Only live runs/);
+  assert.equal(providers,0); assert.equal(saves,0);
+});
+test("live workflow completes final review and exports source-linked ideas with an injected provider",async()=>{
+  const {engine}=setup(),state=await engine.run(); assert.equal(state.mode,"live"); assert.equal(state.status,"completed"); assert.equal(state.final_review.status,"completed"); assert.ok(state.final_review.summary.ideas.length); assert.equal(state.usage.calls,5);
+  const markdown=exportMarkdown(state); assert.doesNotMatch(markdown,/OFFLINE DEMO/); assert.match(markdown,/## Best ideas/); assert.match(markdown,/Source paths: node-1/); assert.match(markdown,/Partial draft/);
+});
+test("archived demos remain exportable but cannot start final review",async()=>{
+  const {engine}=setup(),archived=await engine.run(); archived.mode="demo"; archived.provenance.demo_fixtures=true; delete archived.final_review;
+  const previous=structuredClone(archived); let providers=0,saves=0;
+  assert.throws(()=>Engine.forFinalReview(archived,{providerFactory:()=>{providers++;},onSave:async()=>{saves++;}}),/read-only/);
+  assert.equal(providers,0); assert.equal(saves,0); assert.deepEqual(archived,previous); assert.match(exportMarkdown(archived),/OFFLINE DEMO/);
 });
 test("checkpoints and snapshots do not expose mutable engine state",async()=>{
   const checkpoints=[]; const {engine}=setup({}, {onSave:async state=>{checkpoints.push(state); state.config.concept="mutated copy";}}); const state=await engine.run(); assert.notEqual(state.config.concept,"mutated copy"); assert.ok(checkpoints.length>5); const copy=engine.snapshot(); copy.nodes[0].text="mutated"; assert.notEqual(engine.state.nodes[0].text,"mutated");
@@ -88,7 +100,7 @@ test("failed final synthesis resumes without regenerating or re-reviewing saved 
   let retryProvider; const retry=Engine.forFinalReview(state,{providerFactory:hook=>(retryProvider=new RecordingProvider(hook))}); const result=await retry.run({reviewOnly:true}); assert.equal(result.status,"completed"); assert.equal(retryProvider.prefixes.length,0); assert.equal(retryProvider.posts.length,0); assert.equal(retryProvider.notes.length,1); assert.equal(result.nodes[0].text,state.nodes[0].text); assert.equal(result.usage.calls,state.usage.calls+1);
 });
 test("completed legacy generation can be reviewed while incomplete generation cannot",async()=>{
-  const {engine}=setup(); const seed=await engine.run(); const legacy=savedDrafts(seed,2); delete legacy.final_review; delete legacy.generation_completed; const retry=Engine.forFinalReview(legacy); const result=await retry.run({reviewOnly:true}); assert.equal(result.status,"completed"); assert.equal(result.nodes[0].text,legacy.nodes[0].text);
+  const {engine}=setup(); const seed=await engine.run(); const legacy=savedDrafts(seed,2); delete legacy.final_review; delete legacy.generation_completed; const retry=Engine.forFinalReview(legacy,{providerFactory:hook=>new RecordingProvider(hook)}); const result=await retry.run({reviewOnly:true}); assert.equal(result.status,"completed"); assert.equal(result.nodes[0].text,legacy.nodes[0].text);
   assert.throws(()=>Engine.forFinalReview({...seed,status:"stopped",generation_completed:false}),/Finish generation/); assert.throws(()=>Engine.forFinalReview(seed),/already has/);
 });
 test("oversized final drafts fail explicitly without truncation or model call",async()=>{

@@ -1,5 +1,5 @@
 import {validate, assignments, ValidationError, FINAL_REVIEW_BATCH_SIZE, SUMMARY_BATCH_SIZE, FINAL_INPUT_CHARS} from "./config.js";
-import {DemoProvider, seededRandom} from "./demo.js";
+import {seededRandom} from "./random.js";
 
 const clone = value => structuredClone(value);
 const now = () => new Date().toISOString();
@@ -48,20 +48,18 @@ export function select(candidates,c,depth,titleIndex) {
 }
 
 export class Engine {
-  constructor(config={}, {mode="demo",providerFactory,onSave=async()=>{}}={}) {
-    const c=validate(config); if(!["demo","live"].includes(mode)) fail("Mode must be demo or live.");
+  constructor(config={}, {mode="live",providerFactory,onSave=async()=>{}}={}) {
+    const c=validate(config); if(mode!=="live") fail("Only live runs are supported.");
     this.onSave=onSave; this.stopped=false; this._requestQueue=Promise.resolve();
     const id=[...globalThis.crypto.getRandomValues(new Uint8Array(8))].map(x=>x.toString(16).padStart(2,"0")).join("");
-    this.state={id,config:c,mode,status:"running",created_at:now(),error:null,progress:"Preparing titles",titles:[],nodes:[],outputs:[],generation_completed:false,final_review:{status:"pending",candidate_ids:[],decisions:[],summary:null},usage:{calls:0,input_tokens:0,output_tokens:0,reserved_output_tokens:0},events:[],requests:[],provenance:{synthetic:true,author_labels_are_prompt_cues:true,judge_scores_are_not_fact_checks:true,algorithm:"per-title beam; grace period; diversity penalty; seeded exploration browser v1",base_api:c.base_api,base_model:c.base_model,base_url:c.base_url,demo_fixtures:mode==="demo",output_limit_mode:"request_reservation"}};
+    this.state={id,config:c,mode,status:"running",created_at:now(),error:null,progress:"Preparing titles",titles:[],nodes:[],outputs:[],generation_completed:false,final_review:{status:"pending",candidate_ids:[],decisions:[],summary:null},usage:{calls:0,input_tokens:0,output_tokens:0,reserved_output_tokens:0},events:[],requests:[],provenance:{synthetic:true,author_labels_are_prompt_cues:true,judge_scores_are_not_fact_checks:true,algorithm:"per-title beam; grace period; diversity penalty; seeded exploration browser v1",base_api:c.base_api,base_model:c.base_model,base_url:c.base_url,output_limit_mode:"request_reservation"}};
     this.provider=this.makeProvider(providerFactory);
-    if(mode==="live") {
-      this.provider.preflight?.(c);
-      this.state.provenance.critic_backend=this.provider.criticBackend || "openai";
-      if(this.provider.criticModel) this.state.provenance.critic_model=this.provider.criticModel;
-    }
+    this.provider.preflight?.(c);
+    this.state.provenance.critic_backend=this.provider.criticBackend || "openai";
+    if(this.provider.criticModel) this.state.provenance.critic_model=this.provider.criticModel;
     this.ready=this.save();
   }
-  makeProvider(factory) { const hook=this.request.bind(this); if(factory) return factory(hook); if(this.state.mode==="demo") return new DemoProvider(hook); fail("Live mode requires a configured model provider."); }
+  makeProvider(factory) { const hook=this.request.bind(this); if(factory) return factory(hook); fail("Live mode requires a configured model provider."); }
   snapshot() { return clone(this.state); }
   stop() { this.stopped=true; }
   async save() { await this.onSave(this.snapshot()); }
@@ -81,16 +79,15 @@ export class Engine {
     Object.assign(record,{status:"completed",response:auditCopy(result)}); await this.save(); return result;
   }
   static forFinalReview(state,{providerFactory,onSave=async()=>{}}={}) {
+    if(state.mode!=="live") fail("Archived demo runs are read-only. Start a live run to generate and review posts.");
     if(!(state.generation_completed||state.status==="completed")) fail("Finish generation before reviewing final drafts.");
     if(state.final_review?.status==="completed") fail("This run already has a completed final review.");
     const engine=Object.create(Engine.prototype); engine.onSave=onSave; engine.stopped=false; engine._requestQueue=Promise.resolve(); engine.state=clone(state); engine.state.config=validate(state.config);
     Object.assign(engine.state,{status:"running",error:null,generation_completed:true}); engine.state.final_review ??= {status:"pending",candidate_ids:[],decisions:[],summary:null}; engine.state.requests ??=[]; engine.state.provenance ??={};
     engine.provider=engine.makeProvider(providerFactory);
-    if(state.mode==="live") {
-      engine.provider.preflightCritic?.();
-      engine.state.provenance.final_critic_backend=engine.provider.criticBackend || "openai";
-      if(engine.provider.criticModel) engine.state.provenance.final_critic_model=engine.provider.criticModel;
-    }
+    engine.provider.preflightCritic?.();
+    engine.state.provenance.final_critic_backend=engine.provider.criticBackend || "openai";
+    if(engine.provider.criticModel) engine.state.provenance.final_critic_model=engine.provider.criticModel;
     engine.ready=engine.event("Preparing final review of saved drafts"); return engine;
   }
   async run({reviewOnly=false}={}) {

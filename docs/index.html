@@ -25,8 +25,6 @@
         <div class="estimate-card"><span class="eyebrow">ESTIMATED RUN</span><div class="estimate-values" id="estimate"><span>— <small>titles</small></span><span>— <small>model calls</small></span></div><p id="estimate-detail">Includes title planning and critic calls.</p></div>
         <p class="inline-error" id="form-error" role="alert" hidden></p>
         <button class="button primary" type="submit" id="run-live" disabled>Run live</button>
-        <button class="button secondary" type="button" id="run-demo">Run demo</button>
-        <p class="demo-disclaimer">Demo uses canned examples. No model calls.</p>
         <details class="control-section"><summary><span>Author lenses <span class="count-badge" id="author-count">10</span></span></summary><div class="details-body"><label class="field-label" for="authors">One name per line</label><textarea id="authors" name="authors" rows="10" spellcheck="false">Wei Dai
 Vladimir Nesov
 Vitalik Buterin
@@ -68,13 +66,9 @@ Gwern</textarea><p class="field-help">Synthetic author-inspired drafts.</p></div
     </aside>
     <main class="workspace" id="workspace">
       <div class="inline-error workspace-error" id="workspace-error" role="alert" hidden></div><p class="browser-notice">Runs stay in this browser. Keep this tab open during a run; reloading stops it. Export JSON to back up or share a run.</p>
-      <section class="welcome" id="welcome">
-        <h1>Choose settings and start a run.</h1>
-        <p>Live runs use models. Demo runs use canned examples.</p>
-      </section>
       <section class="run-workspace" id="run-workspace" hidden>
-        <div class="run-heading"><div><div class="run-kicker"><span class="eyebrow" id="run-id">RUN</span><span class="mode-badge" id="run-mode">DEMO</span><span class="status-badge" id="run-status">Running</span></div><h1 id="run-concept"></h1></div><div class="run-actions"><button class="button small secondary" id="load-settings" type="button">Reuse settings</button><button class="button small danger" id="stop-run" type="button">Stop run</button><details class="export-menu"><summary class="button small secondary">Export ↓</summary><div><a id="export-md" href="#" download>Markdown drafts</a><a id="export-json" href="#" download>Complete JSON tree</a></div></details></div></div>
-        <p class="fixture-notice" id="fixture-notice">Demo · canned examples, no model calls.</p>
+        <div class="run-heading"><div><div class="run-kicker"><span class="eyebrow" id="run-id">RUN</span><span class="mode-badge" id="run-mode">LIVE MODELS</span><span class="status-badge" id="run-status">Running</span></div><h1 id="run-concept"></h1></div><div class="run-actions"><button class="button small secondary" id="load-settings" type="button">Reuse settings</button><button class="button small danger" id="stop-run" type="button">Stop run</button><details class="export-menu"><summary class="button small secondary">Export ↓</summary><div><a id="export-md" href="#" download>Markdown drafts</a><a id="export-json" href="#" download>Complete JSON tree</a></div></details></div></div>
+        <p class="archive-notice" id="archive-notice" hidden>Archived demo · read-only canned results. No model calls were made.</p>
         <div class="run-progress"><div class="progress-description"><span class="activity-dot" id="activity-dot"></span><span id="run-progress" role="status" aria-live="polite">Preparing run…</span></div><span class="usage-summary" id="run-usage"></span></div>
         <div class="inline-error" id="run-error" role="alert" hidden></div>
         <div class="run-tabs" role="tablist" aria-label="Run views"><button id="tab-ideas" role="tab" aria-selected="true" aria-controls="view-ideas" data-view="ideas">Best ideas <span id="idea-count">0</span></button><button id="tab-branches" role="tab" aria-selected="false" aria-controls="view-branches" data-view="branches" tabindex="-1">Branch map <span id="node-count">0</span></button><button id="tab-drafts" role="tab" aria-selected="false" aria-controls="view-drafts" data-view="drafts" tabindex="-1">Drafts <span id="draft-count">0</span></button><button id="tab-log" role="tab" aria-selected="false" aria-controls="view-log" data-view="log" tabindex="-1">Run log</button></div>

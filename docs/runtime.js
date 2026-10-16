@@ -160,18 +160,17 @@ export async function createRuntime({providerFactory, getLiveSettings = () => ({
     if (route === '/api/runs' && method === 'GET') return listRuns();
     if (route === '/api/runs' && method === 'POST') {
       const body = payload(options);
-      if (!body || typeof body !== 'object' || Array.isArray(body) || !['live', 'demo'].includes(body.mode)) throw new Error('Choose live or demo mode.');
+      if (!body || typeof body !== 'object' || Array.isArray(body) || body.mode !== 'live') throw new Error('Only live experiments can be started.');
       const config = migrateGenerationConfig(body.config);
-      if (body.mode === 'live') {
-        const live = await liveSettings();
-        if (!live.openai_key || !live.critic_ready) throw new Error(live.critic_status || 'Add your OpenAI API key for Astra in Models before starting.');
-        if (!live.tinker_key) throw new Error(live.continuation_status || 'Add your Tinker API key for continuations in Models before starting.');
-        if (!live.continuation_ready) throw new Error(live.continuation_status || (!live.tinker_relay_ready ? 'Configure the Tinker relay URL in Models before starting.' : 'Tinker continuations are not ready. Check Models before starting.'));
-        config.base_model = config.base_model.trim();
-        if (!config.base_model) throw new Error('Enter a continuation model ID before starting a live run.');
-        if (!providerFactory) throw new Error('The live model provider is unavailable. Reload the page.');
-      }
-      return launch(onSave => new Engine(config, {mode: body.mode, providerFactory: body.mode === 'live' ? providerFactory : undefined, onSave}));
+      const live = await liveSettings();
+      if (!live.openai_key || !live.critic_ready) throw new Error(live.critic_status || 'Add your OpenAI API key for Astra in Models before starting.');
+      if (!live.tinker_key) throw new Error(live.continuation_status || 'Add your Tinker API key for continuations in Models before starting.');
+      if (!live.tinker_relay_ready) throw new Error(live.continuation_status || 'Configure the Tinker relay URL in Models before starting.');
+      if (!live.continuation_ready) throw new Error(live.continuation_status || 'Tinker continuations are not ready. Check Models before starting.');
+      config.base_model = config.base_model.trim();
+      if (!config.base_model) throw new Error('Enter a continuation model ID before starting a live run.');
+      if (!providerFactory) throw new Error('The live model provider is unavailable. Reload the page.');
+      return launch(onSave => new Engine(config, {mode: 'live', providerFactory, onSave}));
     }
     const match = /^\/api\/runs\/([A-Za-z0-9_-]{1,128})(?:\/(stop|final-review|export))?$/.exec(route);
     if (!match) throw new Error('Unknown app operation.');
@@ -188,16 +187,15 @@ export async function createRuntime({providerFactory, getLiveSettings = () => ({
       const limits = payload(options);
       if (!limits || typeof limits !== 'object' || Array.isArray(limits) || Object.keys(limits).some(key => !['max_calls', 'max_output_tokens'].includes(key))) throw new Error('Final review accepts only total call and output-token budgets.');
       const run = await getRun(id, {includeRequests: true});
+      if (run.mode !== 'live') throw new Error('Archived demo experiments are read-only. Start a new live experiment to generate and review ideas.');
       const previous = {max_calls: run.config.max_calls, max_output_tokens: run.config.max_output_tokens};
       run.config = validate({...run.config, ...limits});
       const updated = {max_calls: run.config.max_calls, max_output_tokens: run.config.max_output_tokens};
       if (JSON.stringify(previous) !== JSON.stringify(updated)) run.events.push({time: now(), message: 'Final-review total budgets updated', previous, updated});
-      if (run.mode === 'live') {
-        const live = await liveSettings();
-        if (!live.openai_key || !live.critic_ready) throw new Error(live.critic_status || 'Add your OpenAI API key for Astra in Models before reviewing.');
-        if (!providerFactory) throw new Error('The live model provider is unavailable. Reload the page.');
-      }
-      return launch(onSave => Engine.forFinalReview(run, {providerFactory: run.mode === 'live' ? providerFactory : undefined, onSave}), true);
+      const live = await liveSettings();
+      if (!live.openai_key || !live.critic_ready) throw new Error(live.critic_status || 'Add your OpenAI API key for Astra in Models before reviewing.');
+      if (!providerFactory) throw new Error('The live model provider is unavailable. Reload the page.');
+      return launch(onSave => Engine.forFinalReview(run, {providerFactory, onSave}), true);
     }
     if (action === 'export' && method === 'GET') return exportRun(id, new URLSearchParams(path.split('?')[1] ?? '').get('format') ?? 'json');
     throw new Error('Unknown app operation.');

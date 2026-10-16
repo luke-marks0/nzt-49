@@ -2,14 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Engine} from '../docs/engine.js';
 import {DEFAULTS, DEFAULT_BASE_MODEL, TINKER_API_BASE} from '../docs/config.js';
-import {DemoProvider} from '../docs/demo.js';
+import {FixtureProvider} from './helpers/fixture-provider.mjs';
 import {cleanAudit, validateImportedRun, MAX_IMPORT_BYTES, openRunStore} from '../docs/storage.js';
 import {createRuntime} from '../docs/runtime.js';
 
 const copy = value => structuredClone(value);
 const config = {...DEFAULTS, title_count: 1, depth: 2, branch_factor: 2, beam_width: 1, grace_depth: 1};
 async function fixture() {
-  const engine = new Engine(config, {mode: 'demo'});
+  const engine = new Engine(config, {mode: 'live', providerFactory: hook => new FixtureProvider(hook)});
   await engine.run();
   assert.equal(engine.state.status, 'completed');
   return engine.snapshot();
@@ -31,6 +31,8 @@ function fakeLocks() {
   }};
 }
 const noChannels = {channelFactory: null};
+const readySettings = {critic_ready: true, openai_key: true, continuation_ready: true, tinker_key: true, tinker_relay_ready: true};
+const createTestRuntime = options => createRuntime({providerFactory: hook => new FixtureProvider(hook), getLiveSettings: () => readySettings, ...options});
 async function settle(runtime) {
   for (let i = 0; i < 500 && runtime.isRunning(); i++) await new Promise(resolve => setTimeout(resolve, 1));
   assert.equal(runtime.isRunning(), false, 'run completed');
@@ -93,27 +95,77 @@ test('browser storage requires IndexedDB instead of silently losing history', as
   await assert.rejects(() => openRunStore({indexedDB: null}), /cannot save experiments/);
 });
 
-test('new browser starts empty; demo generation, polling and exports use local history', async () => {
+test('new browser starts empty; live generation, polling and exports use local history', async () => {
   const store = memoryStore();
   let factoryCalls = 0;
-  const runtime = await createRuntime({store, locks: fakeLocks(), ...noChannels, providerFactory: () => { factoryCalls++; throw new Error('demo must not call live provider'); }});
+  const runtime = await createTestRuntime({store, locks: fakeLocks(), ...noChannels, providerFactory: hook => { factoryCalls++; return new FixtureProvider(hook); }});
   assert.deepEqual(await runtime.api('/api/runs'), []);
-  const run = await runtime.api('/api/runs', {method: 'POST', body: JSON.stringify({mode: 'demo', config})});
+  const run = await runtime.api('/api/runs', {method: 'POST', body: JSON.stringify({mode: 'live', config})});
   await settle(runtime);
   const result = await runtime.api(`/api/runs/${run.id}`);
   assert.equal(result.status, 'completed');
   assert.equal(result.requests, undefined);
-  assert.equal(factoryCalls, 0);
+  assert.equal(factoryCalls, 1);
   assert.equal((await runtime.api('/api/runs')).length, 1);
   assert.match(await runtime.exportRun(run.id, 'markdown'), /## Best ideas/);
   assert.ok(JSON.parse(await runtime.exportRun(run.id, 'json')).requests.length);
   await runtime.close();
 });
 
+test('non-live runs are rejected before reading credentials, constructing providers, or saving history', async () => {
+  const store = memoryStore();
+  let factories = 0, settingsReads = 0;
+  const runtime = await createTestRuntime({store, locks: fakeLocks(), ...noChannels,
+    getLiveSettings: () => { settingsReads++; return readySettings; },
+    providerFactory: hook => { factories++; return new FixtureProvider(hook); }});
+  for (const mode of ['demo', 'fixture', '', null, undefined]) {
+    await assert.rejects(() => runtime.api('/api/runs', {method: 'POST', body: {mode, config}}), /Only live experiments/);
+  }
+  assert.equal(settingsReads, 0);
+  assert.equal(factories, 0);
+  assert.equal(runtime.isRunning(), false);
+  assert.deepEqual(await runtime.api('/api/runs'), []);
+  assert.equal(store.data.size, 0);
+  await runtime.close();
+});
+
+test('historical demo archives can be read, imported and exported but cannot be reviewed or mutated', async () => {
+  const archived = await fixture();
+  archived.mode = 'demo';
+  archived.provenance.demo_fixtures = true;
+  archived.final_review.status = 'interrupted';
+  archived.final_review.summary = null;
+  const store = memoryStore([archived]);
+  let factories = 0, settingsReads = 0;
+  const runtime = await createTestRuntime({store, locks: fakeLocks(), ...noChannels,
+    getLiveSettings: () => { settingsReads++; return readySettings; },
+    providerFactory: hook => { factories++; return new FixtureProvider(hook); }});
+  assert.equal((await runtime.api('/api/runs'))[0].mode, 'demo');
+  const loaded = await runtime.api(`/api/runs/${archived.id}`);
+  assert.equal(loaded.mode, 'demo');
+  assert.deepEqual(loaded.nodes, archived.nodes);
+  assert.deepEqual(JSON.parse(await runtime.exportRun(archived.id, 'json')), archived);
+  assert.match(await runtime.exportRun(archived.id, 'markdown'), /OFFLINE DEMO/);
+  const imported = await runtime.importRun(archived);
+  assert.equal(imported.mode, 'demo');
+  assert.notEqual(imported.id, archived.id);
+  assert.deepEqual(imported.nodes, archived.nodes);
+  const importedBefore = copy(store.data.get(imported.id));
+  for (const id of [archived.id, imported.id]) {
+    await assert.rejects(() => runtime.api(`/api/runs/${id}/final-review`, {method: 'POST', body: {max_calls: 500, max_output_tokens: 500000}}), /demo experiments are read-only/);
+  }
+  assert.equal(settingsReads, 0);
+  assert.equal(factories, 0);
+  assert.equal(runtime.isRunning(), false);
+  assert.deepEqual(store.data.get(archived.id), archived);
+  assert.deepEqual(store.data.get(imported.id), importedBefore);
+  await runtime.close();
+});
+
 test('imports get fresh IDs without modifying originals or prior runs', async () => {
   const original = await fixture();
   const store = memoryStore([original]);
-  const runtime = await createRuntime({store, locks: fakeLocks(), ...noChannels});
+  const runtime = await createTestRuntime({store, locks: fakeLocks(), ...noChannels});
   const imported = await runtime.importRun(original);
   assert.notEqual(imported.id, original.id);
   assert.equal((await runtime.api('/api/runs')).length, 2);
@@ -126,7 +178,7 @@ test('reload recovers interrupted runs while preserving text and completed revie
   const original = await fixture();
   original.status = 'running'; original.final_review.status = 'summarizing';
   const store = memoryStore([original]);
-  const runtime = await createRuntime({store, locks: fakeLocks(), ...noChannels});
+  const runtime = await createTestRuntime({store, locks: fakeLocks(), ...noChannels});
   const recovered = await runtime.api(`/api/runs/${original.id}`);
   assert.equal(recovered.status, 'stopped');
   assert.equal(recovered.final_review.status, 'interrupted');
@@ -141,7 +193,7 @@ test('reload makes final review retryable if generation finished before review s
   original.final_review.status = 'pending';
   original.final_review.summary = null;
   const store = memoryStore([original]);
-  const runtime = await createRuntime({store, locks: fakeLocks(), ...noChannels});
+  const runtime = await createTestRuntime({store, locks: fakeLocks(), ...noChannels});
   const recovered = await runtime.api(`/api/runs/${original.id}`);
   assert.equal(recovered.status, 'stopped');
   assert.equal(recovered.final_review.status, 'interrupted');
@@ -155,16 +207,16 @@ test('reload makes final review retryable if generation finished before review s
 test('second tab cannot recover or overwrite a run held by another tab', async () => {
   const original = await fixture(); original.status = 'running';
   const store = memoryStore([original]);
-  const runtime = await createRuntime({store, locks: {request: async (name, options, callback) => callback(null)}, ...noChannels});
+  const runtime = await createTestRuntime({store, locks: {request: async (name, options, callback) => callback(null)}, ...noChannels});
   assert.equal((await runtime.api(`/api/runs/${original.id}`)).status, 'running');
-  await assert.rejects(() => runtime.api('/api/runs', {method: 'POST', body: {mode: 'demo', config}}), /already running/);
+  await assert.rejects(() => runtime.api('/api/runs', {method: 'POST', body: {mode: 'live', config}}), /already running/);
   assert.deepEqual(store.data.get(original.id), original);
   await runtime.close();
 });
 
 test('model settings are refreshed and return only safe flags; live start requires critic access', async () => {
   let settings = {critic_ready: false, critic_status: 'Add a key', api_key: 'private'};
-  const runtime = await createRuntime({store: memoryStore(), locks: fakeLocks(), ...noChannels, getLiveSettings: () => settings});
+  const runtime = await createTestRuntime({store: memoryStore(), locks: fakeLocks(), ...noChannels, getLiveSettings: () => settings});
   assert.equal((await runtime.api('/api/config')).live.api_key, undefined);
   await assert.rejects(() => runtime.api('/api/runs', {method: 'POST', body: {mode: 'live', config}}), /Add a key/);
   settings = {critic_ready: true, base_model: 'new-model', tinker_key: 'private', openai_key: true};
@@ -180,8 +232,8 @@ test('model settings are refreshed and return only safe flags; live start requir
 test('full live runs require two ready keys and an explicit continuation model before invoking a provider', async () => {
   let settings = {critic_ready: true, openai_key: true, continuation_ready: false, tinker_key: false};
   let created = 0;
-  const runtime = await createRuntime({store: memoryStore(), locks: fakeLocks(), ...noChannels,
-    getLiveSettings: () => settings, providerFactory: hook => { created++; return new DemoProvider(hook); }});
+  const runtime = await createTestRuntime({store: memoryStore(), locks: fakeLocks(), ...noChannels,
+    getLiveSettings: () => settings, providerFactory: hook => { created++; return new FixtureProvider(hook); }});
   const start = override => runtime.api('/api/runs', {method: 'POST', body: {mode: 'live', config: {...config, ...override}}});
   await assert.rejects(() => start(), /Tinker API key/);
   settings = {critic_ready: true, openai_key: false, continuation_ready: true, tinker_key: true};
@@ -190,7 +242,11 @@ test('full live runs require two ready keys and an explicit continuation model b
   await assert.rejects(() => start(), /OpenAI API key/);
   settings = {critic_ready: true, openai_key: true, continuation_ready: false, tinker_key: true, tinker_relay_ready: false};
   await assert.rejects(() => start(), /Tinker relay URL/);
-  settings = {critic_ready: true, openai_key: true, continuation_ready: true, tinker_key: true, base_model: DEFAULT_BASE_MODEL};
+  settings = {...readySettings, tinker_relay_ready: false};
+  await assert.rejects(() => start(), /Tinker relay URL/);
+  settings = {...readySettings, continuation_ready: false};
+  await assert.rejects(() => start(), /continuations are not ready/);
+  settings = {...readySettings, base_model: DEFAULT_BASE_MODEL};
   await assert.rejects(() => start({base_model: ' '}), /model ID/);
   assert.equal(created, 0);
   const run = await start();
@@ -209,7 +265,7 @@ test('relay connection settings never enter stored configs or migrate from impor
   assert.equal(clean.provenance.tinker_relay_url, undefined);
   run.config.tinker_relay_url = 'https://untrusted.example';
   assert.throws(() => validateImportedRun(run), /Unknown configuration/);
-  const runtime = await createRuntime({store: memoryStore(), locks: fakeLocks(), ...noChannels,
+  const runtime = await createTestRuntime({store: memoryStore(), locks: fakeLocks(), ...noChannels,
     getLiveSettings: () => ({tinker_relay_ready: true, tinker_relay_url: 'https://configured.example'})});
   const settings = await runtime.api('/api/config');
   assert.equal(settings.live.tinker_relay_ready, true);
@@ -224,14 +280,14 @@ test('legacy history and imports retain provider provenance; reused settings cre
   Object.assign(legacy.provenance, {base_api: 'openrouter', base_url: legacy.config.base_url, base_model: legacy.config.base_model, critic_backend: 'openrouter', critic_model: 'old/critic'});
   assert.deepEqual(validateImportedRun(legacy), legacy);
   const store = memoryStore([legacy]);
-  const runtime = await createRuntime({store, locks: fakeLocks(), ...noChannels});
+  const runtime = await createTestRuntime({store, locks: fakeLocks(), ...noChannels});
   const loaded = await runtime.api(`/api/runs/${legacy.id}`);
   assert.deepEqual(loaded.config, legacy.config);
   assert.deepEqual(loaded.provenance, legacy.provenance);
   const imported = await runtime.importRun(legacy);
   assert.deepEqual(imported.config, legacy.config);
   assert.deepEqual(imported.provenance, legacy.provenance);
-  const reused = await runtime.api('/api/runs', {method: 'POST', body: {mode: 'demo', config: legacy.config}});
+  const reused = await runtime.api('/api/runs', {method: 'POST', body: {mode: 'live', config: legacy.config}});
   await settle(runtime);
   assert.equal(reused.config.base_api, 'tinker');
   assert.equal(reused.config.base_url, TINKER_API_BASE);
@@ -249,9 +305,9 @@ test('legacy final review uses only OpenAI readiness and preserves original gene
   legacy.final_review = {status: 'pending', candidate_ids: [], decisions: [], summary: null};
   const settings = {critic_ready: true, openai_key: true, continuation_ready: false, tinker_key: false};
   let continuations = 0;
-  const runtime = await createRuntime({store: memoryStore([legacy]), locks: fakeLocks(), ...noChannels, getLiveSettings: () => settings,
+  const runtime = await createTestRuntime({store: memoryStore([legacy]), locks: fakeLocks(), ...noChannels, getLiveSettings: () => settings,
     providerFactory: hook => {
-      const provider = new DemoProvider(hook);
+      const provider = new FixtureProvider(hook);
       provider.continue_post = () => { continuations++; throw new Error('must not regenerate'); };
       return provider;
     }});
@@ -268,11 +324,11 @@ test('legacy final review uses only OpenAI readiness and preserves original gene
   await runtime.close();
 });
 
-test('saved demo final review can resume with larger budgets and no live provider', async () => {
+test('saved live final review can resume with larger budgets and an injected provider', async () => {
   const original = await fixture();
   original.final_review.status = 'interrupted'; original.final_review.summary = null;
   const store = memoryStore([original]);
-  const runtime = await createRuntime({store, locks: fakeLocks(), ...noChannels, providerFactory: () => { throw new Error('not live'); }});
+  const runtime = await createTestRuntime({store, locks: fakeLocks(), ...noChannels});
   await runtime.api(`/api/runs/${original.id}/final-review`, {method: 'POST', body: {max_calls: 300}});
   await settle(runtime);
   const result = await runtime.api(`/api/runs/${original.id}`);

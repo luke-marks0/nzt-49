@@ -9,9 +9,9 @@ A browser app for exploring macrostrategy ideas through branching synthetic post
 1. Enter your **Tinker API key**, **OpenAI API key**, and trusted **Tinker relay URL** in Models, then click **Use keys in this tab**. Tinker calls pass through that relay; the OpenAI key goes directly to OpenAI. A relay deployment is required for live generation; see [relay setup](relay/README.md).
 2. Astra uses `gpt-6-astra` through OpenAI's Responses API for titles, intermediate pruning, final pruning, and synthesis. This uses OpenAI API billing, not a ChatGPT/Codex subscription. Tinker bills continuation calls separately.
 3. Choose a supported Tinker model ID or `tinker://…/sampler_weights/…` path. The preset is `Qwen/Qwen3.5-9B-Base`, documented by Tinker as a pretrained, non-chat-tuned model. Custom checkpoints may have been fine-tuned; check their provenance.
-4. Set a concept, title count, branching depth, temperatures, and budgets, then **Run live**. **Run demo** exercises the same workflow with clearly labeled canned fixtures and no model requests.
+4. Set a concept, title count, branching depth, temperatures, and budgets, then **Run live**. All new runs use the configured models.
 
-Keep the tab open during a run. Closing or reloading it stops execution; saved checkpoints remain available. An interrupted final review can resume with only an OpenAI key, without regenerating posts. Generation itself does not yet resume. Older exported runs remain readable; reusing their settings switches new generation to Tinker without changing the original run.
+Keep the tab open during a run. Closing or reloading it stops execution; saved checkpoints remain available. An interrupted final review can resume with only an OpenAI key, without regenerating posts. Generation itself does not yet resume. Older exported runs remain readable; reusing their settings switches new generation to Tinker without changing the original run. Previously saved demo runs can still be viewed and exported, but are read-only.
 
 ## Your data
 
@@ -20,7 +20,7 @@ Keep the tab open during a run. Closing or reloading it stops execution; saved c
 - Astra prompts and generated text go directly to OpenAI with `store: false`. Tinker prompts and the Tinker key pass through the selected relay to Tinker. The relay has no database, key storage, request logging, or run history; its Cloudflare observability is disabled. Provider retention policies still apply. Use a relay you trust.
 - Export **Markdown** for the final ideas and drafts, or **JSON** for the complete tree and audit trail. JSON files can be imported into another browser. Importing does not upload the file.
 - Browser storage can be cleared or evicted. Export runs you want to keep. Different devices and browser profiles have independent histories.
-- No previous user runs or credentials are included in the repository. Demo examples are code fixtures, not saved user history.
+- No previous user runs or credentials are included in the repository.
 
 ## How the search works
 

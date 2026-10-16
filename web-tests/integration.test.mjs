@@ -113,9 +113,8 @@ test('LiveProvider and Engine complete the real Responses/raw-completion contrac
 });
 
 test('LiveProvider and Engine review a legacy run using only OpenAI while preserving old generation and provenance', async () => {
-  const demo = new Engine(config, {mode: 'demo'});
-  const legacy = await demo.run();
-  legacy.mode = 'live';
+  const initial = new Engine(config, {providerFactory: harness().providerFactory});
+  const legacy = await initial.run();
   Object.assign(legacy.config, {base_api: 'openrouter', base_url: 'https://openrouter.ai/api/v1', base_model: 'historical/completion-model', base_reasoning: 'off'});
   Object.assign(legacy.provenance, {demo_fixtures: false, base_api: 'openrouter', base_url: legacy.config.base_url, base_model: legacy.config.base_model, critic_backend: 'openrouter', critic_model: 'historical/critic'});
   delete legacy.final_review;

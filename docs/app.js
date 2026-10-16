@@ -3,7 +3,7 @@ import { LiveProvider, DEFAULT_CRITIC_MODEL, isSecurePageContext as credentialsA
 import { TINKER_API_BASE, DEFAULT_BASE_MODEL, DEFAULT_TINKER_RELAY_URL, migrateGenerationConfig } from "./config.js";
 
 const credentials = { tinkerKey: "", openaiKey: "", tinkerRelayUrl: "" };
-const HTTPS_REQUIRED = "Open NZT-49 over HTTPS to enter an API key or run live models. Demo and saved runs remain available.";
+const HTTPS_REQUIRED = "Open NZT-49 over HTTPS to enter API keys or run models. Saved runs remain available to read and export.";
 function getLiveSettings() {
   return {
     critic_ready: credentialsAllowedHere() && Boolean(credentials.openaiKey),
@@ -120,9 +120,8 @@ async function estimate() {
 
 function setBusy(value) {
   state.busy = value;
-  $("#run-demo").disabled = value || state.credentialSaving;
   $("#run-live").disabled = value || state.credentialSaving || !liveReady();
-  $("#run-demo").textContent = value ? "Starting…" : "Run demo";
+  $("#run-live").textContent = value ? "Starting…" : "Run live";
   renderCredentialControl();
 }
 
@@ -228,7 +227,7 @@ async function refreshHistory() {
     select.firstChild.value = "";
     for (const run of state.runs) {
       const date = new Date(run.created_at).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"});
-      const option = text("option", `${run.mode === "demo" ? "Demo · " : ""}${date} · ${readableStatus(run.status)} · ${run.concept || run.config?.concept || run.id}`);
+      const option = text("option", `${run.mode === "demo" ? "Archived demo · " : ""}${date} · ${readableStatus(run.status)} · ${run.concept || run.config?.concept || run.id}`);
       option.value = run.id;
       select.append(option);
     }
@@ -237,19 +236,19 @@ async function refreshHistory() {
   } catch (error) { showError("#workspace-error", `Could not load this browser’s runs. ${error.message}`); }
 }
 
-async function startRun(mode) {
+async function startRun() {
   if (state.busy || state.credentialSaving) return;
-  if (mode === "live" && !credentialsAllowedHere()) { showError("#form-error", HTTPS_REQUIRED); return; }
-  if (mode === "live" && !liveReady()) { showError("#form-error", "Apply your Tinker key, OpenAI key, and a trusted Tinker relay URL in Models before starting a live run."); return; }
+  if (!credentialsAllowedHere()) { showError("#form-error", HTTPS_REQUIRED); return; }
+  if (!liveReady()) { showError("#form-error", "Apply your Tinker key, OpenAI key, and a trusted Tinker relay URL in Models before starting a live run."); return; }
   if (!$("#experiment-form").reportValidity()) return;
   const config = configFromForm();
   const error = validateConfig(config);
   showError("#form-error", error);
   if (error) return;
-  if (mode === "live" && !config.base_model) { showError("#form-error", "Enter a continuation model ID."); $("#base-model").closest("details").open = true; $("#base-model").focus(); return; }
+  if (!config.base_model) { showError("#form-error", "Enter a continuation model ID."); $("#base-model").closest("details").open = true; $("#base-model").focus(); return; }
   setBusy(true);
   try {
-    const run = await api("/api/runs", { method: "POST", body: JSON.stringify({ config, mode }) });
+    const run = await api("/api/runs", { method: "POST", body: JSON.stringify({ config, mode: "live" }) });
     clearTimeout(state.pollTimer);
     state.runRequest++;
     state.selectedTitle = null; state.selectedNode = null;
@@ -287,7 +286,7 @@ function schedulePoll() {
 }
 
 function runIsActive() {
-  return state.run?.status === "running" || ["reviewing", "summarizing"].includes(state.run?.final_review?.status);
+  return state.run?.mode === "live" && (state.run.status === "running" || ["reviewing", "summarizing"].includes(state.run.final_review?.status));
 }
 
 async function pollRun() {
@@ -356,7 +355,7 @@ function appendCaveats(container, caveats) {
 
 function canReviewFinalDrafts() {
   const run = state.run;
-  return Boolean(run && !runIsActive() && (run.generation_completed || run.status === "completed") &&
+  return Boolean(run?.mode === "live" && !runIsActive() && (run.generation_completed || run.status === "completed") &&
     (!run.final_review || ["interrupted", "failed", "skipped"].includes(run.final_review.status)));
 }
 
@@ -367,7 +366,7 @@ function renderFinalReviewControls() {
   $("#final-review-controls").hidden = hidden;
   const button = $("#review-final-drafts");
   button.hidden = hidden;
-  button.disabled = starting || state.credentialSaving || (run.mode === "live" && !criticReady());
+  button.disabled = run.mode !== "live" || starting || state.credentialSaving || !criticReady();
   button.title = run.mode === "live" && !criticReady() ? (!credentialsAllowedHere() ? HTTPS_REQUIRED : "Add your OpenAI API key in Models to review saved drafts.") : "";
   button.textContent = starting ? "Starting review…" : "Review final drafts";
   const calls = $("#review-max-calls");
@@ -401,14 +400,14 @@ function renderBestIdeas() {
     failed: "Final review failed. Saved drafts and branches remain available.",
     interrupted: "Final review was interrupted. Saved drafts and review decisions remain available.",
   };
-  $("#final-review-status").textContent = review ? messages[review.status] || "Final review has not completed." :
+  $("#final-review-status").textContent = run.mode === "demo" ? "Archived demo results · read only; no live models were called." : review ? messages[review.status] || "Final review has not completed." :
     run.status === "running" ? "Not yet reviewed. Final review follows generation." : "Not yet reviewed.";
   $("#idea-count").textContent = prettyNumber(ideas.length);
   showError("#final-review-error", review?.error);
   const content = $("#best-ideas-content"); content.replaceChildren();
   if (summary?.overview) content.append(text("p", summary.overview, "best-ideas-overview"));
   if (!ideas.length) {
-    const message = review?.status === "completed" ? "The original drafts and review decisions are available in Branch map." :
+    const message = run.mode === "demo" ? "This archive has no saved idea summary. Its branches remain available to read and export." : review?.status === "completed" ? "The original drafts and review decisions are available in Branch map." :
       canReview ? "Review the saved final drafts. Raise the total budgets above if needed." :
       !completedGeneration && !runIsActive() ? "Generation did not complete. Inspect the saved branches or run log." :
       "You can inspect drafts and branches while the run progresses.";
@@ -444,8 +443,9 @@ function renderBestIdeas() {
 
 async function startFinalReview() {
   const id = state.run?.id;
-  if (state.run?.mode === "live" && !credentialsAllowedHere()) { showError("#final-review-error", HTTPS_REQUIRED); return; }
-  if (state.run?.mode === "live" && !criticReady()) { showError("#final-review-error", "Add your OpenAI API key in Models to review saved drafts."); return; }
+  if (state.run?.mode !== "live") return;
+  if (!credentialsAllowedHere()) { showError("#final-review-error", HTTPS_REQUIRED); return; }
+  if (!criticReady()) { showError("#final-review-error", "Add your OpenAI API key in Models to review saved drafts."); return; }
   if (!id || state.reviewStarting || state.credentialSaving || !canReviewFinalDrafts()) return;
   const limits = {};
   for (const [key, selector, label, minimum, maximum] of [
@@ -486,15 +486,15 @@ function renderRun() {
   const run = state.run;
   if (!run) return;
   renderCredentialControl();
-  $("#welcome").hidden = true; $("#run-workspace").hidden = false;
+  $("#run-workspace").hidden = false;
   $("#run-id").textContent = `EXPERIMENT / ${run.id.slice(-8)}`;
   $("#run-concept").textContent = run.config?.concept || run.concept || "Untitled experiment";
-  $("#run-mode").textContent = run.mode === "demo" ? "DEMO FIXTURES" : "LIVE MODELS";
-  $("#run-mode").classList.toggle("demo", run.mode === "demo");
-  $("#run-status").textContent = readableStatus(run.status);
-  $("#run-status").classList.toggle("failed", run.status === "failed");
-  $("#fixture-notice").hidden = run.mode !== "demo";
-  $("#run-progress").textContent = run.progress || readableStatus(run.status);
+  $("#run-mode").textContent = run.mode === "demo" ? "ARCHIVED DEMO" : "LIVE MODELS";
+  $("#run-mode").classList.toggle("archive", run.mode === "demo");
+  $("#run-status").textContent = run.mode === "demo" ? "Read only" : readableStatus(run.status);
+  $("#run-status").classList.toggle("failed", run.mode === "live" && run.status === "failed");
+  $("#archive-notice").hidden = run.mode !== "demo";
+  $("#run-progress").textContent = run.mode === "demo" ? "Archived demo; this run cannot be continued." : run.progress || readableStatus(run.status);
   $("#activity-dot").classList.toggle("running", runIsActive());
   $("#run-usage").textContent = `${prettyNumber(run.usage?.calls)} ${run.mode === "demo" ? "simulated calls" : "calls"} · ${prettyNumber(run.usage?.output_tokens)} output tokens`;
   $("#stop-run").hidden = !runIsActive();
@@ -509,7 +509,7 @@ function renderRun() {
   if (!titles.some(title => title.id === state.selectedTitle)) state.selectedTitle = titles[0]?.id || null;
   const titleSelect = $("#title-select");
   titleSelect.replaceChildren();
-  if (!titles.length) { const option = text("option", "Planning titles…"); option.value = ""; titleSelect.append(option); }
+  if (!titles.length) { const option = text("option", runIsActive() ? "Planning titles…" : "No saved titles"); option.value = ""; titleSelect.append(option); }
   for (const title of titles) { const option = text("option", title.title); option.value = title.id; titleSelect.append(option); }
   titleSelect.value = state.selectedTitle || "";
   titleSelect.disabled = !titles.length;
@@ -527,7 +527,7 @@ function renderTree() {
   const oldScroll = list.scrollTop;
   list.replaceChildren();
   const nodes = (state.run?.nodes || []).filter(node => node.title_id === state.selectedTitle);
-  if (!nodes.length) { list.append(text("p", state.run?.status === "running" ? "Waiting for the first continuations…" : "No continuations were generated for this title.", "tree-empty")); return; }
+  if (!nodes.length) { list.append(text("p", runIsActive() ? "Waiting for the first continuations…" : "No continuations were generated for this title.", "tree-empty")); return; }
   const ordered = []; const visited = new Set();
   function visit(node) { if (visited.has(node.id)) return; visited.add(node.id); ordered.push(node); nodes.filter(child => child.parent_id === node.id).forEach(visit); }
   nodes.filter(node => !node.parent_id || !nodes.some(parent => parent.id === node.parent_id)).forEach(visit);
@@ -613,9 +613,9 @@ function renderGallery() {
   const gallery = $("#view-drafts"); gallery.replaceChildren();
   const nodes = survivingNodes();
   if (!nodes.length) {
-    const empty = text("div", "", "gallery-empty"); empty.append(text("p", state.run?.status === "running" ? "Generating drafts…" : "No surviving drafts. See branches or run log.")); gallery.append(empty); return;
+    const empty = text("div", "", "gallery-empty"); empty.append(text("p", runIsActive() ? "Generating drafts…" : "No surviving drafts. See branches or run log.")); gallery.append(empty); return;
   }
-  gallery.append(text("p", `${nodes.length} ${state.run?.status === "running" ? "currently surviving" : "surviving"} path${nodes.length === 1 ? "" : "s"}. Multiple paths may share a title and opening.`, "gallery-intro"));
+  gallery.append(text("p", `${nodes.length} ${runIsActive() ? "currently surviving" : "surviving"} path${nodes.length === 1 ? "" : "s"}. Multiple paths may share a title and opening.`, "gallery-intro"));
   nodes.forEach((node, index) => {
     const title = getTitle(node.title_id) || {};
     const card = text("article", "", "draft-card");
@@ -675,12 +675,11 @@ async function importRunFile(event) {
   finally { event.target.value = ""; $("#import-run").disabled = false; }
 }
 
-$("#experiment-form").addEventListener("submit", event => { event.preventDefault(); startRun("live"); });
+$("#experiment-form").addEventListener("submit", event => { event.preventDefault(); startRun(); });
 $("#import-run").addEventListener("click", () => $("#import-file").click());
 $("#import-file").addEventListener("change", importRunFile);
 $("#export-md").addEventListener("click", event => { event.preventDefault(); exportCurrentRun("markdown"); });
 $("#export-json").addEventListener("click", event => { event.preventDefault(); exportCurrentRun("json"); });
-$("#run-demo").addEventListener("click", () => startRun("demo"));
 $("#use-api-keys").addEventListener("click", useApiKeys);
 for (const selector of ["#tinker-key", "#openai-key", "#tinker-relay-url"]) {
   $(selector).addEventListener("input", () => { showError("#api-keys-error", null); $("#api-keys-status").hidden = true; renderCredentialControl(); });
@@ -694,7 +693,7 @@ $("#toggle-controls").addEventListener("click", () => { const open = $("#experim
 $("#load-settings").addEventListener("click", () => { applyConfig(state.run?.config); $("#experiment-panel").classList.add("mobile-open"); $("#toggle-controls").setAttribute("aria-expanded", "true"); $("#concept").focus(); });
 $("#stop-run").addEventListener("click", async () => {
   const id = state.run?.id;
-  if (!id) return;
+  if (!id || state.run.mode !== "live") return;
   $("#stop-run").disabled = true; $("#stop-run").textContent = "Stopping…";
   try { const run = await api(`/api/runs/${encodeURIComponent(id)}/stop`, { method: "POST", body: "{}" }); if (state.run?.id === id) { state.run = run; renderRun(); schedulePoll(); refreshHistory(); } }
   catch (error) { showError("#workspace-error", `Could not stop the experiment. ${error.message}`); $("#stop-run").disabled = false; $("#stop-run").textContent = "Stop run"; }
