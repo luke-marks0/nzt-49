@@ -1,0 +1,17 @@
+# Credentials and personal experiment data never belong in the public repository.
+.env*
+.nzt/
+**/__pycache__/
+*.pyc
+node_modules/
+.DS_Store
+# Local predecessor and abandoned hosting/package work.
+share-site/
+dist/
+nzt/
+static/
+tests/
+run.sh
+SHARE.md
+LOCAL_README.md
+scripts/package_share.py
