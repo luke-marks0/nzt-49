@@ -1,7 +1,8 @@
 import { PROMPTS, SCHEMAS } from './prompts.js';
+import { TINKER_API_BASE } from './config.js';
 
-export const DEFAULT_CRITIC_MODEL = 'openai/gpt-6-astra';
-const API = 'https://openrouter.ai/api/v1/chat/completions';
+export const DEFAULT_CRITIC_MODEL = 'gpt-6-astra';
+const OPENAI_API = 'https://api.openai.com/v1/responses';
 const MAX_RESPONSE = 8 * 1024 * 1024;
 export class ProviderError extends Error { constructor(message) { super(message); this.name = 'ProviderError'; } }
 const fail = message => { throw new ProviderError(message); };
@@ -19,45 +20,70 @@ function reorder(items, ids) {
   const mapped = new Map(items.map(item => [item.id, item]));
   return ids.map(id => mapped.get(id));
 }
+function redactCredentials(value, secrets, depth = 0) {
+  if (depth > 40) fail('The provider response was too deeply nested.');
+  if (typeof value === 'string') {
+    for (const secret of secrets) if (secret) value = value.split(secret).join('[credential redacted]');
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(item => redactCredentials(item, secrets, depth + 1));
+  if (object(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [redactCredentials(key, secrets, depth + 1), redactCredentials(item, secrets, depth + 1)]));
+  return value;
+}
 export function continuationEndpoint(config) {
   let url;
-  try { url = new URL(config.base_url); } catch { fail('Choose a valid OpenRouter endpoint.'); }
-  if (url.origin !== 'https://openrouter.ai' || url.username || url.password || url.search || url.hash) fail('This browser app sends keys only to https://openrouter.ai.');
-  const suffix = config.base_api === 'completions' ? '/completions' : '/chat/completions';
-  const path = url.pathname.replace(/\/+$/, '');
-  if (path === '/api/v1') return url.origin + path + suffix;
-  if (path !== '/api/v1' + suffix) fail('The endpoint does not match the selected completion API.');
-  return url.origin + path;
+  try { url = new URL(config.base_url); } catch { fail('Choose the Tinker completion endpoint.'); }
+  if (config.base_api !== 'tinker' || url.username || url.password || url.search || url.hash || url.href.replace(/\/+$/, '') !== TINKER_API_BASE) fail('New continuations use only the Tinker raw-completion endpoint.');
+  return TINKER_API_BASE + '/completions';
+}
+export function relayEndpoint(value) {
+  let url;
+  try { url = new URL(value); } catch { fail('Enter the trusted Tinker relay URL.'); }
+  if (!isSecurePageContext(url) || url.username || url.password || url.search || url.hash || !['', '/', '/completions', '/completions/'].includes(url.pathname)) fail('Use an HTTPS relay URL without credentials, query, or fragment. Local development may use loopback HTTP.');
+  return url.origin + '/completions';
 }
 
 export class LiveProvider {
-  #key;
-  constructor(requestHook, { openrouterKey, criticModel = DEFAULT_CRITIC_MODEL, astraEnabled = false, fetchImpl = globalThis.fetch } = {}) {
+  #tinkerKey;
+  #openaiKey;
+  #relayUrl;
+  constructor(requestHook, { tinkerKey = '', openaiKey = '', tinkerRelayUrl = '', criticModel = DEFAULT_CRITIC_MODEL, fetchImpl = globalThis.fetch } = {}) {
     if (!isSecurePageContext()) fail('Open NZT-49 over HTTPS before using an API key.');
-    if (typeof openrouterKey !== 'string' || !/^[\x21-\x7e]{1,512}$/.test(openrouterKey)) fail('Enter an OpenRouter key for this tab.');
+    for (const [key, name] of [[tinkerKey, 'Tinker'], [openaiKey, 'OpenAI']]) if (typeof key !== 'string' || (key && !/^[\x21-\x7e]{1,1024}$/.test(key))) fail(`Enter a valid ${name} key for this tab.`);
     if (criticModel !== DEFAULT_CRITIC_MODEL) fail('This experiment uses the explicitly selected Astra model.');
-    this.#key = openrouterKey;
+    this.#tinkerKey = tinkerKey;
+    this.#openaiKey = openaiKey;
+    this.#relayUrl = tinkerRelayUrl;
     this.request = requestHook;
     this.criticModel = criticModel;
-    this.astraEnabled = astraEnabled === true;
+    this.criticBackend = 'openai';
     this.fetchImpl = fetchImpl;
+  }
+  preflightCritic() {
+    if (!this.#openaiKey) fail('Enter an OpenAI API key for Astra.');
   }
   preflight(config) {
     continuationEndpoint(config);
     if (!nonempty(config.base_model)) fail('Choose an explicit continuation model ID.');
-    if (!this.astraEnabled) fail('Enable paid Astra through OpenRouter before starting a live run.');
+    if (!this.#tinkerKey) fail('Enter a Tinker API key for continuations.');
+    relayEndpoint(this.#relayUrl);
+    this.preflightCritic();
   }
-  async http(url, payload) {
+  async http(service, payload) {
     if (!isSecurePageContext()) fail('Open NZT-49 over HTTPS before using an API key.');
-    if (new URL(url).origin !== 'https://openrouter.ai') fail('The key can only be sent to OpenRouter.');
+    if (!['openai', 'tinker'].includes(service)) fail('Unknown model service.');
+    const name = service === 'openai' ? 'OpenAI' : 'Tinker';
+    const key = service === 'openai' ? this.#openaiKey : this.#tinkerKey;
+    if (!key) fail(`Enter a ${name} API key for this tab.`);
+    const url = service === 'openai' ? OPENAI_API : relayEndpoint(this.#relayUrl);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 180000);
     try {
       const response = await this.fetchImpl(url, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + this.#key },
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
         body: JSON.stringify(payload), signal: controller.signal, redirect: 'error', credentials: 'omit', referrerPolicy: 'no-referrer',
       });
-      if (!response.ok) fail(`OpenRouter returned HTTP ${response.status}. Check the model, key, credits, and rate limits.`);
+      if (!response.ok) fail(`${name}${service === 'tinker' ? ' or its relay' : ''} returned HTTP ${response.status}. Check the model, key, credits, and rate limits.`);
       let raw;
       if (response.body?.getReader) {
         const reader = response.body.getReader();
@@ -75,31 +101,32 @@ export class LiveProvider {
       } else raw = await response.text();
       if (raw.length > MAX_RESPONSE) fail('The provider response exceeded the size limit.');
       // An upstream diagnostic must not copy a credential into browser history.
-      raw = raw.split(this.#key).join('[credential redacted]');
+      for (const secret of [this.#tinkerKey, this.#openaiKey]) if (secret) raw = raw.split(secret).join('[credential redacted]');
       let result;
-      try { result = JSON.parse(raw); } catch { fail('OpenRouter returned invalid JSON.'); }
-      if (!object(result) || result.error) fail('OpenRouter could not complete the request. Check model access, credits, and limits.');
+      try { result = JSON.parse(raw); } catch { fail(`${name} returned invalid JSON.`); }
+      result = redactCredentials(result, [this.#tinkerKey, this.#openaiKey]);
+      if (!object(result) || result.error) fail(`${name} could not complete the request. Check model access, credits, and limits.`);
       const usage = result.usage;
-      if (usage != null && (!object(usage) || ['prompt_tokens','completion_tokens','input_tokens','output_tokens'].some(k => usage[k] != null && (!Number.isSafeInteger(usage[k]) || usage[k] < 0)))) fail('OpenRouter returned invalid token usage.');
+      if (usage != null && (!object(usage) || ['prompt_tokens','completion_tokens','input_tokens','output_tokens'].some(k => usage[k] != null && (!Number.isSafeInteger(usage[k]) || usage[k] < 0)))) fail(`${name} returned invalid token usage.`);
       return result;
     } catch (error) {
       if (error instanceof ProviderError) throw error;
-      fail('OpenRouter request failed or timed out. Check your connection and browser access to the API. Saved drafts are preserved.');
+      fail(`${name} request failed or timed out. Check your connection${service === 'tinker' ? ' and the relay URL' : ' and API access'}. Saved drafts are preserved.`);
     } finally { clearTimeout(timeout); }
   }
   async critic(kind, data, cap) {
-    if (!this.astraEnabled) fail('Enable paid Astra through OpenRouter before starting a live run.');
+    this.preflightCritic();
     const payload = {
-      model: this.criticModel, messages: [{role:'system',content:PROMPTS[kind]}, {role:'user',content:JSON.stringify(data)}],
-      max_tokens: cap, stream:false, reasoning:{effort:'low'},
-      response_format:{type:'json_schema',json_schema:{name:'nzt_' + kind,strict:true,schema:SCHEMAS[kind]}},
-      provider:{require_parameters:true},
+      model: this.criticModel, instructions: PROMPTS[kind], input: JSON.stringify(data),
+      max_output_tokens: cap, store:false, reasoning:{effort:'low'},
+      text:{format:{type:'json_schema',name:'nzt_' + kind,strict:true,schema:SCHEMAS[kind]}},
     };
-    const result = await this.request(payload, 'critic', () => this.http(API, payload));
-    const choice = result.choices?.[0];
-    if (result.choices?.length !== 1 || choice?.finish_reason !== 'stop' || choice.message?.refusal || !nonempty(choice.message?.content)) fail('Astra did not return a complete structured result; partial judgments were rejected.');
+    const result = await this.request(payload, 'critic', () => this.http('openai', payload));
+    const messages = Array.isArray(result.output) ? result.output.filter(item => item?.type === 'message') : [];
+    if (result.status !== 'completed' || result.incomplete_details || messages?.length !== 1 || messages[0].role !== 'assistant' || messages[0].status !== 'completed' || !Array.isArray(messages[0].content) || messages[0].content.some(item => item.type !== 'output_text' || !nonempty(item.text))) fail('Astra did not return a complete structured result; partial judgments and refusals were rejected.');
+    const content = messages[0].content.map(item => item.text).join('');
     let parsed;
-    try { parsed = JSON.parse(choice.message.content); } catch { fail('Astra returned invalid structured JSON.'); }
+    try { parsed = JSON.parse(content); } catch { fail('Astra returned invalid structured JSON.'); }
     if (!object(parsed)) fail('Astra returned an invalid structured result.');
     return parsed;
   }
@@ -116,22 +143,17 @@ export class LiveProvider {
     return result.titles;
   }
   async continue_post(config, title, prefix, temperature, seed) {
-    const url = continuationEndpoint(config);
+    continuationEndpoint(config);
     if (!nonempty(config.base_model) || !Number.isFinite(temperature) || temperature < 0 || !Number.isInteger(config.chunk_tokens) || config.chunk_tokens < 1 || typeof prefix !== 'string') fail('Invalid continuation settings.');
     const prompt = 'SYNTHETIC IDEATION EXPERIMENT: This is a fictional, unpublished draft, not a real post or an author\'s statement.\nExplore the concept through the intellectual interests associated with the named author.\n' +
       `Concept: ${config.concept}\nConceptual lens: ${title.lens}\n\nVenue: ${title.venue}\nTitle: ${title.title}\nImagined author: ${title.author}\n\n` + prefix;
-    const payload = {model:config.base_model,temperature,top_p:1,n:1,max_tokens:config.chunk_tokens,stream:false,provider:{require_parameters:true}};
-    if (config.base_api === 'chat') payload.messages = [
-      {role:'system',content:'Continue the supplied fictional draft directly from its exact ending. Return only new continuation text. Preserve sentence fragments and whitespace. Do not repeat, summarize, or revise the prefix, or add introductory commentary.'},
-      {role:'user',content:prompt},
-    ]; else payload.prompt = prompt;
-    if (config.base_reasoning === 'off') payload.reasoning = {enabled:false};
-    const result = await this.request(payload,'base',()=>this.http(url,payload));
+    const payload = {model:config.base_model,prompt,temperature,top_p:1,max_tokens:config.chunk_tokens};
+    const result = await this.request(payload,'base',()=>this.http('tinker',payload));
     const choice = result.choices?.[0];
     if (result.choices?.length !== 1 || !['stop','length'].includes(choice?.finish_reason) || choice.message?.refusal) fail('The continuation was filtered, incomplete, or invalid.');
-    const text = typeof choice.text === 'string' ? choice.text : choice.message?.content;
-    if (!nonempty(text)) fail('No continuation text returned. Disable continuation reasoning or increase chunk tokens.');
-    return {text,finish_reason:choice.finish_reason,adapter:config.base_api,response_shape:typeof choice.text === 'string'?'text':'message.content',experimental_mode:config.base_api==='chat'?'chat_comparison':'raw_completion'};
+    const text = choice.text;
+    if (!nonempty(text)) fail('Tinker returned no raw completion text. Check the model ID and token limit.');
+    return {text,finish_reason:choice.finish_reason,adapter:'tinker',response_shape:'text',experimental_mode:'raw_completion'};
   }
   async evaluate(config, title, candidates) {
     if (!candidates.length) return [];

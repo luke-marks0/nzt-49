@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Engine} from '../docs/engine.js';
-import {DEFAULTS} from '../docs/config.js';
+import {DEFAULTS, DEFAULT_BASE_MODEL, TINKER_API_BASE} from '../docs/config.js';
+import {DemoProvider} from '../docs/demo.js';
 import {cleanAudit, validateImportedRun, MAX_IMPORT_BYTES, openRunStore} from '../docs/storage.js';
 import {createRuntime} from '../docs/runtime.js';
 
@@ -66,6 +67,9 @@ test('import strips unknown metadata and credential/header fields, rejects secre
   run.requests[0].request.api_key = 'private';
   run.requests[0].response.credentials = {token: 'private'};
   run.requests[0].response.nested = {openrouter_api_key: 'private', keep: 'safe'};
+  run.requests[0].response.OPENAI_API_KEY = 'private';
+  run.requests[0].response.TINKER_API_KEY = 'private';
+  run.requests[0].response['X-Tinker-Api-Key'] = 'private';
   const clean = validateImportedRun(run);
   assert.equal(clean.secret, undefined);
   assert.equal(clean.nodes[0].dangerous, undefined);
@@ -163,11 +167,104 @@ test('model settings are refreshed and return only safe flags; live start requir
   const runtime = await createRuntime({store: memoryStore(), locks: fakeLocks(), ...noChannels, getLiveSettings: () => settings});
   assert.equal((await runtime.api('/api/config')).live.api_key, undefined);
   await assert.rejects(() => runtime.api('/api/runs', {method: 'POST', body: {mode: 'live', config}}), /Add a key/);
-  settings = {critic_ready: true, base_model: 'new-model', base_key: 'private', openrouter_key: true};
+  settings = {critic_ready: true, base_model: 'new-model', tinker_key: 'private', openai_key: true};
   const updated = await runtime.api('/api/config');
   assert.equal(updated.defaults.base_model, 'new-model');
-  assert.equal(updated.live.base_key, false);
-  assert.equal(updated.live.openrouter_key, true);
+  assert.equal(updated.live.tinker_key, false);
+  assert.equal(updated.live.openai_key, true);
+  assert.equal(updated.live.base_key, undefined);
+  assert.equal(updated.live.openrouter_key, undefined);
+  await runtime.close();
+});
+
+test('full live runs require two ready keys and an explicit continuation model before invoking a provider', async () => {
+  let settings = {critic_ready: true, openai_key: true, continuation_ready: false, tinker_key: false};
+  let created = 0;
+  const runtime = await createRuntime({store: memoryStore(), locks: fakeLocks(), ...noChannels,
+    getLiveSettings: () => settings, providerFactory: hook => { created++; return new DemoProvider(hook); }});
+  const start = override => runtime.api('/api/runs', {method: 'POST', body: {mode: 'live', config: {...config, ...override}}});
+  await assert.rejects(() => start(), /Tinker API key/);
+  settings = {critic_ready: true, openai_key: false, continuation_ready: true, tinker_key: true};
+  await assert.rejects(() => start(), /OpenAI API key/);
+  settings = {critic_ready: false, openai_key: true, continuation_ready: true, tinker_key: true};
+  await assert.rejects(() => start(), /OpenAI API key/);
+  settings = {critic_ready: true, openai_key: true, continuation_ready: false, tinker_key: true, tinker_relay_ready: false};
+  await assert.rejects(() => start(), /Tinker relay URL/);
+  settings = {critic_ready: true, openai_key: true, continuation_ready: true, tinker_key: true, base_model: DEFAULT_BASE_MODEL};
+  await assert.rejects(() => start({base_model: ' '}), /model ID/);
+  assert.equal(created, 0);
+  const run = await start();
+  await settle(runtime);
+  assert.equal((await runtime.api(`/api/runs/${run.id}`)).status, 'completed');
+  assert.equal(created, 1);
+  await runtime.close();
+});
+
+test('relay connection settings never enter stored configs or migrate from imported runs', async () => {
+  const run = await fixture();
+  run.tinker_relay_url = 'https://untrusted.example';
+  run.provenance.tinker_relay_url = 'https://untrusted.example';
+  const clean = validateImportedRun(run);
+  assert.equal(clean.tinker_relay_url, undefined);
+  assert.equal(clean.provenance.tinker_relay_url, undefined);
+  run.config.tinker_relay_url = 'https://untrusted.example';
+  assert.throws(() => validateImportedRun(run), /Unknown configuration/);
+  const runtime = await createRuntime({store: memoryStore(), locks: fakeLocks(), ...noChannels,
+    getLiveSettings: () => ({tinker_relay_ready: true, tinker_relay_url: 'https://configured.example'})});
+  const settings = await runtime.api('/api/config');
+  assert.equal(settings.live.tinker_relay_ready, true);
+  assert.equal(settings.live.tinker_relay_url, undefined);
+  assert.equal(settings.defaults.tinker_relay_url, undefined);
+  await runtime.close();
+});
+
+test('legacy history and imports retain provider provenance; reused settings create Tinker runs', async () => {
+  const legacy = await fixture();
+  Object.assign(legacy.config, {base_api: 'openrouter', base_url: 'https://openrouter.ai/api/v1', base_model: 'old/completion-model', base_reasoning: 'off'});
+  Object.assign(legacy.provenance, {base_api: 'openrouter', base_url: legacy.config.base_url, base_model: legacy.config.base_model, critic_backend: 'openrouter', critic_model: 'old/critic'});
+  assert.deepEqual(validateImportedRun(legacy), legacy);
+  const store = memoryStore([legacy]);
+  const runtime = await createRuntime({store, locks: fakeLocks(), ...noChannels});
+  const loaded = await runtime.api(`/api/runs/${legacy.id}`);
+  assert.deepEqual(loaded.config, legacy.config);
+  assert.deepEqual(loaded.provenance, legacy.provenance);
+  const imported = await runtime.importRun(legacy);
+  assert.deepEqual(imported.config, legacy.config);
+  assert.deepEqual(imported.provenance, legacy.provenance);
+  const reused = await runtime.api('/api/runs', {method: 'POST', body: {mode: 'demo', config: legacy.config}});
+  await settle(runtime);
+  assert.equal(reused.config.base_api, 'tinker');
+  assert.equal(reused.config.base_url, TINKER_API_BASE);
+  assert.equal(reused.config.base_model, DEFAULT_BASE_MODEL);
+  assert.equal(reused.config.concept, legacy.config.concept);
+  assert.deepEqual(store.data.get(legacy.id), legacy);
+  await runtime.close();
+});
+
+test('legacy final review uses only OpenAI readiness and preserves original generation settings', async () => {
+  const legacy = await fixture();
+  legacy.mode = 'live';
+  Object.assign(legacy.config, {base_api: 'openrouter', base_url: 'https://openrouter.ai/api/v1', base_model: 'old/model', base_reasoning: 'off'});
+  Object.assign(legacy.provenance, {base_api: 'openrouter', base_url: legacy.config.base_url, base_model: 'old/model'});
+  legacy.final_review = {status: 'pending', candidate_ids: [], decisions: [], summary: null};
+  const settings = {critic_ready: true, openai_key: true, continuation_ready: false, tinker_key: false};
+  let continuations = 0;
+  const runtime = await createRuntime({store: memoryStore([legacy]), locks: fakeLocks(), ...noChannels, getLiveSettings: () => settings,
+    providerFactory: hook => {
+      const provider = new DemoProvider(hook);
+      provider.continue_post = () => { continuations++; throw new Error('must not regenerate'); };
+      return provider;
+    }});
+  await runtime.api(`/api/runs/${legacy.id}/final-review`, {method: 'POST', body: {}});
+  await settle(runtime);
+  const reviewed = await runtime.api(`/api/runs/${legacy.id}`);
+  assert.equal(reviewed.status, 'completed');
+  assert.equal(reviewed.final_review.status, 'completed');
+  assert.equal(continuations, 0);
+  assert.deepEqual(reviewed.config, legacy.config);
+  assert.equal(reviewed.provenance.base_api, 'openrouter');
+  assert.equal(reviewed.provenance.base_model, 'old/model');
+  assert.deepEqual(reviewed.nodes.map(node => node.text), legacy.nodes.map(node => node.text));
   await runtime.close();
 });
 

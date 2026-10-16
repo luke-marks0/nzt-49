@@ -50,7 +50,7 @@ const unique = (values, label) => {
 const optionalString = (source, target, key, max = 20000) => {
   if (own(source, key)) target[key] = source[key] === null ? null : string(source[key], key, max);
 };
-const SECRET_FIELD = /^(?:headers?|authorization|proxy-authorization|x-api-key|api[-_]?key|access[-_]?token|refresh[-_]?token|openrouter[-_]?key|openrouter[-_]?api[-_]?key|base[-_]?api[-_]?key|critic[-_]?api[-_]?key|password|credentials|secret|key)$/i;
+const SECRET_FIELD = /^(?:headers?|authorization|proxy-authorization|x-api-key|x-tinker-api-key|api[-_]?key|access[-_]?token|refresh[-_]?token|(?:openrouter|openai|tinker)[-_]?(?:api[-_]?)?key|base[-_]?api[-_]?key|critic[-_]?api[-_]?key|password|credentials|secret|key)$/i;
 const DANGEROUS_FIELD = new Set(['__proto__', 'prototype', 'constructor']);
 
 // Audit payloads can contain arbitrary model JSON. Keep their structure, but
@@ -189,7 +189,7 @@ export function validateImportedRun(input) {
     if (own(provenance, key)) result.provenance[key] = bool(provenance[key], key);
   }
   for (const key of ['algorithm', 'base_api', 'base_model', 'critic_model', 'critic_backend', 'output_limit_mode', 'final_critic_model', 'final_critic_backend', 'final_review']) optionalString(provenance, result.provenance, key, 100000);
-  if (own(provenance, 'base_url')) result.provenance.base_url = config.base_url;
+  if (own(provenance, 'base_url')) result.provenance.base_url = validate({...config, base_url: provenance.base_url}).base_url;
   if (source.final_review != null) {
     const review = object(source.final_review, 'final review');
     result.final_review = {status: choice(review.status, REVIEW_STATUSES, 'review status'),

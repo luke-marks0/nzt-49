@@ -1,28 +1,33 @@
 import { createRuntime } from "./runtime.js";
 import { LiveProvider, DEFAULT_CRITIC_MODEL, isSecurePageContext as credentialsAllowedHere } from "./providers.js";
+import { TINKER_API_BASE, DEFAULT_BASE_MODEL, DEFAULT_TINKER_RELAY_URL, migrateGenerationConfig } from "./config.js";
 
-const credentials = { openrouterKey: "", criticMode: "unconfigured" };
+const credentials = { tinkerKey: "", openaiKey: "", tinkerRelayUrl: "" };
 const HTTPS_REQUIRED = "Open NZT-49 over HTTPS to enter an API key or run live models. Demo and saved runs remain available.";
 function getLiveSettings() {
   return {
-    critic_ready: credentialsAllowedHere() && credentials.criticMode === "openrouter" && Boolean(credentials.openrouterKey),
-    critic_status: !credentialsAllowedHere() ? HTTPS_REQUIRED : credentials.criticMode !== "openrouter" ? "Astra access selection" : "OpenRouter key",
+    critic_ready: credentialsAllowedHere() && Boolean(credentials.openaiKey),
+    critic_status: !credentialsAllowedHere() ? HTTPS_REQUIRED : "Add an OpenAI API key for Astra in Models.",
+    continuation_ready: credentialsAllowedHere() && Boolean(credentials.tinkerKey && credentials.tinkerRelayUrl),
+    continuation_status: !credentialsAllowedHere() ? HTTPS_REQUIRED : !credentials.tinkerRelayUrl ? "Apply a trusted Tinker relay URL in Models." : "Add a Tinker API key for continuations in Models.",
     critic_model: DEFAULT_CRITIC_MODEL,
-    critic_backend: "openrouter",
-    openrouter_key: Boolean(credentials.openrouterKey),
-    base_key: false,
-    base_model: "nvidia/nemotron-3.5-lightning:free",
-    base_url: "https://openrouter.ai/api/v1",
-    base_api: "openrouter",
-    base_reasoning: "off",
+    critic_backend: "openai",
+    tinker_key: credentialsAllowedHere() && Boolean(credentials.tinkerKey),
+    tinker_relay_ready: credentialsAllowedHere() && Boolean(credentials.tinkerRelayUrl),
+    openai_key: credentialsAllowedHere() && Boolean(credentials.openaiKey),
+    base_model: DEFAULT_BASE_MODEL,
+    base_url: TINKER_API_BASE,
+    base_api: "tinker",
+    base_reasoning: "default",
   };
 }
 let runtime;
 const runtimeReady = createRuntime({
   providerFactory: requestHook => new LiveProvider(requestHook, {
-    openrouterKey: credentials.openrouterKey,
+    tinkerKey: credentials.tinkerKey,
+    openaiKey: credentials.openaiKey,
+    tinkerRelayUrl: credentials.tinkerRelayUrl,
     criticModel: DEFAULT_CRITIC_MODEL,
-    astraEnabled: credentialsAllowedHere() && credentials.criticMode === "openrouter",
   }),
   getLiveSettings,
 }).then(value => { runtime = value; return value; });
@@ -51,9 +56,9 @@ function configFromForm() {
   config.title_mode = data.get("title_mode");
   config.selection_mode = data.get("selection_mode");
   config.base_model = String(data.get("base_model") || "").trim();
-  config.base_url = String(data.get("base_url") || "").trim();
-  config.base_api = data.get("base_api") || "openrouter";
-  config.base_reasoning = data.get("base_reasoning") || "default";
+  config.base_url = TINKER_API_BASE;
+  config.base_api = "tinker";
+  config.base_reasoning = "default";
   return config;
 }
 
@@ -69,7 +74,7 @@ function validateConfig(config) {
 
 function applyConfig(config) {
   if (!config) return;
-  config = {base_reasoning: "default", ...config, base_url: "https://openrouter.ai/api/v1"};
+  config = migrateGenerationConfig(config);
   const form = $("#experiment-form");
   for (const [key, value] of Object.entries(config)) {
     const input = form.elements.namedItem(key);
@@ -83,7 +88,7 @@ function applyConfig(config) {
 function updateFormLabels() {
   $("#author-count").textContent = $("#authors").value.split(/\r?\n/).filter(x => x.trim()).length;
   $("#exploration-label").textContent = `${Math.round(Number($("#exploration-fraction").value) * 100)}%`;
-  $("#api-note").textContent = $("#base-api").value === "chat" ? "Chat messages; not raw continuation." : $("#base-api").value === "completions" ? "Raw text completions." : "Raw prompt via OpenRouter.";
+  $("#api-note").textContent = "Raw text continuations via Tinker.";
 }
 
 function scheduleEstimate() {
@@ -128,66 +133,90 @@ function credentialChangeBlocked() {
 function renderCredentialControl() {
   const blocked = credentialChangeBlocked();
   const insecure = !credentialsAllowedHere();
-  const input = $("#openrouter-key");
-  const button = $("#use-openrouter-key");
-  if (insecure) { input.value = ""; credentials.openrouterKey = ""; }
-  input.disabled = insecure || state.credentialSaving || blocked;
-  button.disabled = insecure || state.credentialSaving || blocked || !input.value.trim();
-  button.textContent = "Use key in this tab";
-  button.title = insecure ? HTTPS_REQUIRED : blocked ? "Wait for the current run to finish before changing credentials." : "Use this key until this tab is reloaded or closed";
-  $("#critic-mode").disabled = insecure || state.credentialSaving || blocked;
-  $("#openrouter-key-help").textContent = insecure ? HTTPS_REQUIRED : "Kept only in this tab’s memory. Requests go directly to OpenRouter. Reloading clears the key.";
+  const inputs = [$("#tinker-key"), $("#openai-key")];
+  const relayInput = $("#tinker-relay-url");
+  const button = $("#use-api-keys");
+  if (insecure) { inputs.forEach(input => { input.value = ""; }); credentials.tinkerKey = ""; credentials.openaiKey = ""; credentials.tinkerRelayUrl = ""; }
+  inputs.forEach(input => { input.disabled = insecure || state.credentialSaving || blocked; });
+  relayInput.disabled = insecure || state.credentialSaving || blocked;
+  $("#tinker-key").placeholder = credentials.tinkerKey ? "Tinker key loaded · paste to replace" : "Paste your Tinker API key";
+  $("#openai-key").placeholder = credentials.openaiKey ? "OpenAI key loaded · paste to replace" : "Paste your OpenAI API key";
+  const hasChanges = inputs.some(input => input.value.trim()) || relayInput.value.trim() !== credentials.tinkerRelayUrl;
+  button.disabled = insecure || state.credentialSaving || blocked || !hasChanges;
+  button.title = insecure ? HTTPS_REQUIRED : blocked ? "Wait for the current run to finish before changing credentials." : "Use these keys until this tab is reloaded or closed";
+  $("#api-keys-help").textContent = insecure ? HTTPS_REQUIRED : "Keys and relay settings stay in this tab’s memory. Reloading clears them.";
 }
 
-async function useOpenRouterKey() {
+function normalizeRelayUrl(value) {
+  if (!value) return "";
+  let url;
+  try { url = new URL(value); } catch (_) { throw new Error("Enter a valid Tinker relay URL."); }
+  const localHttp = url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]", "::1"].includes(url.hostname);
+  const path = url.pathname.replace(/\/+$/, "");
+  if ((url.protocol !== "https:" && !localHttp) || !url.hostname || url.username || url.password || url.search || url.hash || /\s/.test(value) || !["", "/completions"].includes(path)) {
+    throw new Error("Use an HTTPS relay URL ending at its root or /completions, without credentials, a query, or a fragment. Localhost HTTP is supported for development.");
+  }
+  return url.origin + path;
+}
+
+async function useApiKeys() {
   if (state.credentialSaving) return;
-  showError("#openrouter-key-error", null);
+  showError("#api-keys-error", null);
   if (!credentialsAllowedHere()) {
     renderCredentialControl();
-    showError("#openrouter-key-error", HTTPS_REQUIRED);
+    showError("#api-keys-error", HTTPS_REQUIRED);
     return;
   }
   if (credentialChangeBlocked()) {
-    showError("#openrouter-key-error", "Wait for the current run to finish before changing credentials.");
+    showError("#api-keys-error", "Wait for the current run to finish before changing credentials.");
     return;
   }
-  const input = $("#openrouter-key");
-  const key = input.value.trim();
-  if (!key) {
-    showError("#openrouter-key-error", "Paste your OpenRouter API key first.");
+  const tinkerKey = $("#tinker-key").value.trim();
+  const openaiKey = $("#openai-key").value.trim();
+  let relayUrl;
+  try { relayUrl = normalizeRelayUrl($("#tinker-relay-url").value.trim()); }
+  catch (error) { showError("#api-keys-error", error.message); return; }
+  if (!tinkerKey && !openaiKey && relayUrl === credentials.tinkerRelayUrl) {
+    showError("#api-keys-error", "Paste an API key or update your trusted Tinker relay URL first.");
     return;
   }
-  if (!/^sk-or-\S+$/.test(key)) {
-    showError("#openrouter-key-error", "Enter an OpenRouter API key beginning with sk-or- and containing no spaces.");
+  if ([tinkerKey, openaiKey].some(key => key && !/^[\x21-\x7e]{1,512}$/.test(key))) {
+    showError("#api-keys-error", "API keys must be at most 512 characters and contain no spaces.");
     return;
   }
-  credentials.openrouterKey = key;
+  if (tinkerKey) credentials.tinkerKey = tinkerKey;
+  if (openaiKey) credentials.openaiKey = openaiKey;
+  credentials.tinkerRelayUrl = relayUrl;
   state.live = getLiveSettings();
-  input.value = "";
-  $("#openrouter-key-status").textContent = "Key stored in this tab. It will be checked on your first live request.";
-  $("#openrouter-key-status").hidden = false;
+  $("#tinker-key").value = "";
+  $("#openai-key").value = "";
+  $("#tinker-relay-url").value = relayUrl;
+  $("#api-keys-status").textContent = "Connection settings applied for this tab. Keys are checked on the first request.";
+  $("#api-keys-status").hidden = false;
   renderModelConfig();
 }
 
+function criticReady() {
+  return credentialsAllowedHere() && Boolean(state.live.critic_ready && state.live.openai_key);
+}
+
 function liveReady() {
-  if (!credentialsAllowedHere() || !state.live.critic_ready) return false;
-  try {
-    const endpoint = new URL($("#base-url").value);
-    return endpoint.hostname !== "openrouter.ai" || Boolean(state.live.base_key || state.live.openrouter_key);
-  } catch (_) { return false; }
+  return criticReady() && Boolean(state.live.continuation_ready && state.live.tinker_key && state.live.tinker_relay_ready);
 }
 
 function renderModelConfig() {
   $("#critic-model").textContent = state.live.critic_model || DEFAULT_CRITIC_MODEL;
   if (!$("#base-model").value && state.live.base_model) $("#base-model").value = state.live.base_model;
   const missing = [];
-  if (credentials.criticMode !== "openrouter") missing.push("Astra access selection");
-  if (!state.live.base_key && !state.live.openrouter_key && $("#base-url").value.includes("openrouter.ai")) missing.push("OpenRouter key");
+  if (!state.live.openai_key) missing.push("OpenAI key for Astra");
+  if (!state.live.tinker_key) missing.push("Tinker key for continuations");
+  if (!state.live.tinker_relay_ready) missing.push("trusted Tinker relay URL");
   $("#model-status").textContent = !credentialsAllowedHere() ? HTTPS_REQUIRED : !liveReady() ? `Missing: ${missing.join(" and ") || "model credentials"}.` : $("#base-model").value ? "Ready." : "Enter a continuation model ID.";
   $("#connection-dot").classList.toggle("ready", liveReady());
   $("#run-live").disabled = state.busy || state.credentialSaving || !liveReady();
   $("#run-live").title = !credentialsAllowedHere() ? HTTPS_REQUIRED : missing.length ? missing.join(". ") : "Start with Astra and the selected continuation model";
   renderCredentialControl();
+  if (state.run) renderFinalReviewControls();
 }
 
 async function refreshHistory() {
@@ -211,6 +240,7 @@ async function refreshHistory() {
 async function startRun(mode) {
   if (state.busy || state.credentialSaving) return;
   if (mode === "live" && !credentialsAllowedHere()) { showError("#form-error", HTTPS_REQUIRED); return; }
+  if (mode === "live" && !liveReady()) { showError("#form-error", "Apply your Tinker key, OpenAI key, and a trusted Tinker relay URL in Models before starting a live run."); return; }
   if (!$("#experiment-form").reportValidity()) return;
   const config = configFromForm();
   const error = validateConfig(config);
@@ -337,8 +367,8 @@ function renderFinalReviewControls() {
   $("#final-review-controls").hidden = hidden;
   const button = $("#review-final-drafts");
   button.hidden = hidden;
-  button.disabled = starting || state.credentialSaving || (run.mode === "live" && !credentialsAllowedHere());
-  button.title = run.mode === "live" && !credentialsAllowedHere() ? HTTPS_REQUIRED : "";
+  button.disabled = starting || state.credentialSaving || (run.mode === "live" && !criticReady());
+  button.title = run.mode === "live" && !criticReady() ? (!credentialsAllowedHere() ? HTTPS_REQUIRED : "Add your OpenAI API key in Models to review saved drafts.") : "";
   button.textContent = starting ? "Starting review…" : "Review final drafts";
   const calls = $("#review-max-calls");
   const tokens = $("#review-max-output-tokens");
@@ -349,6 +379,7 @@ function renderFinalReviewControls() {
   }
   calls.disabled = starting;
   tokens.disabled = starting;
+  $("#review-budget-note").textContent = "Totals include this run’s previous usage." + (run.mode === "live" && !criticReady() ? " Add your OpenAI API key in Models to review saved drafts." : "");
 }
 
 function renderBestIdeas() {
@@ -414,6 +445,7 @@ function renderBestIdeas() {
 async function startFinalReview() {
   const id = state.run?.id;
   if (state.run?.mode === "live" && !credentialsAllowedHere()) { showError("#final-review-error", HTTPS_REQUIRED); return; }
+  if (state.run?.mode === "live" && !criticReady()) { showError("#final-review-error", "Add your OpenAI API key in Models to review saved drafts."); return; }
   if (!id || state.reviewStarting || state.credentialSaving || !canReviewFinalDrafts()) return;
   const limits = {};
   for (const [key, selector, label, minimum, maximum] of [
@@ -649,18 +681,13 @@ $("#import-file").addEventListener("change", importRunFile);
 $("#export-md").addEventListener("click", event => { event.preventDefault(); exportCurrentRun("markdown"); });
 $("#export-json").addEventListener("click", event => { event.preventDefault(); exportCurrentRun("json"); });
 $("#run-demo").addEventListener("click", () => startRun("demo"));
-$("#use-openrouter-key").addEventListener("click", useOpenRouterKey);
-$("#openrouter-key").addEventListener("input", () => { showError("#openrouter-key-error", null); $("#openrouter-key-status").hidden = true; renderCredentialControl(); });
-$("#openrouter-key").addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); useOpenRouterKey(); } });
+$("#use-api-keys").addEventListener("click", useApiKeys);
+for (const selector of ["#tinker-key", "#openai-key", "#tinker-relay-url"]) {
+  $(selector).addEventListener("input", () => { showError("#api-keys-error", null); $("#api-keys-status").hidden = true; renderCredentialControl(); });
+  $(selector).addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); useApiKeys(); } });
+}
 $("#review-final-drafts").addEventListener("click", startFinalReview);
-$("#critic-mode").addEventListener("change", event => {
-  if (!credentialsAllowedHere()) { event.target.value = "unconfigured"; credentials.criticMode = "unconfigured"; state.live = getLiveSettings(); renderModelConfig(); return; }
-  if (credentialChangeBlocked()) { event.target.value = credentials.criticMode; return; }
-  credentials.criticMode = event.target.value === "openrouter" ? "openrouter" : "unconfigured";
-  state.live = getLiveSettings();
-  renderModelConfig();
-});
-$("#experiment-form").addEventListener("input", event => { if (["openrouter-key", "critic-mode"].includes(event.target.id)) return; updateFormLabels(); renderModelConfig(); scheduleEstimate(); showError("#form-error", null); });
+$("#experiment-form").addEventListener("input", event => { if (["tinker-key", "openai-key", "tinker-relay-url"].includes(event.target.id)) return; updateFormLabels(); renderModelConfig(); scheduleEstimate(); showError("#form-error", null); });
 $("#run-history").addEventListener("change", event => loadRun(event.target.value));
 $("#title-select").addEventListener("change", event => { state.selectedTitle = event.target.value; state.selectedNode = null; renderRun(); $("#reader-panel").scrollTop = 0; });
 $("#toggle-controls").addEventListener("click", () => { const open = $("#experiment-panel").classList.toggle("mobile-open"); $("#toggle-controls").setAttribute("aria-expanded", String(open)); });
@@ -689,6 +716,7 @@ window.addEventListener("beforeunload", event => {
 });
 
 async function initialize() {
+  $("#tinker-relay-url").value = DEFAULT_TINKER_RELAY_URL;
   updateFormLabels();
   renderModelConfig();
   const results = await Promise.allSettled([api("/api/config"), refreshHistory()]);

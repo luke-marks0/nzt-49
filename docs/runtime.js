@@ -1,4 +1,4 @@
-import {DEFAULTS, validate, estimate} from './config.js';
+import {DEFAULTS, validate, estimate, migrateGenerationConfig} from './config.js';
 import {Engine, exportMarkdown} from './engine.js';
 import {openRunStore, validateImportedRun, newRunId} from './storage.js';
 
@@ -21,8 +21,8 @@ function interrupted(run, message) {
 
 function safeLiveSettings(source = {}) {
   const result = {};
-  for (const key of ['critic_ready', 'base_key', 'openrouter_key']) result[key] = source[key] === true;
-  for (const key of ['critic_model', 'critic_backend', 'critic_status', 'base_model', 'base_url', 'base_api', 'base_reasoning']) {
+  for (const key of ['critic_ready', 'continuation_ready', 'tinker_relay_ready', 'tinker_key', 'openai_key']) result[key] = source[key] === true;
+  for (const key of ['critic_model', 'critic_backend', 'critic_status', 'continuation_status', 'base_model', 'base_url', 'base_api', 'base_reasoning']) {
     if (typeof source[key] === 'string') result[key] = source[key].slice(0, 2000);
   }
   return result;
@@ -154,18 +154,20 @@ export async function createRuntime({providerFactory, getLiveSettings = () => ({
       const live = await liveSettings();
       const defaults = clone(DEFAULTS);
       for (const key of ['base_model', 'base_url', 'base_api', 'base_reasoning']) if (live[key]) defaults[key] = live[key];
-      return {defaults, live};
+      return {defaults: migrateGenerationConfig(defaults), live};
     }
-    if (route === '/api/estimate' && method === 'POST') return estimate(validate(payload(options)));
+    if (route === '/api/estimate' && method === 'POST') return estimate(migrateGenerationConfig(payload(options)));
     if (route === '/api/runs' && method === 'GET') return listRuns();
     if (route === '/api/runs' && method === 'POST') {
       const body = payload(options);
       if (!body || typeof body !== 'object' || Array.isArray(body) || !['live', 'demo'].includes(body.mode)) throw new Error('Choose live or demo mode.');
-      const config = validate(body.config);
+      const config = migrateGenerationConfig(body.config);
       if (body.mode === 'live') {
         const live = await liveSettings();
-        if (!live.critic_ready) throw new Error(live.critic_status || 'Configure a critic model and key in Models before starting.');
-        config.base_model = config.base_model.trim() || live.base_model || '';
+        if (!live.openai_key || !live.critic_ready) throw new Error(live.critic_status || 'Add your OpenAI API key for Astra in Models before starting.');
+        if (!live.tinker_key) throw new Error(live.continuation_status || 'Add your Tinker API key for continuations in Models before starting.');
+        if (!live.continuation_ready) throw new Error(live.continuation_status || (!live.tinker_relay_ready ? 'Configure the Tinker relay URL in Models before starting.' : 'Tinker continuations are not ready. Check Models before starting.'));
+        config.base_model = config.base_model.trim();
         if (!config.base_model) throw new Error('Enter a continuation model ID before starting a live run.');
         if (!providerFactory) throw new Error('The live model provider is unavailable. Reload the page.');
       }
@@ -192,7 +194,7 @@ export async function createRuntime({providerFactory, getLiveSettings = () => ({
       if (JSON.stringify(previous) !== JSON.stringify(updated)) run.events.push({time: now(), message: 'Final-review total budgets updated', previous, updated});
       if (run.mode === 'live') {
         const live = await liveSettings();
-        if (!live.critic_ready) throw new Error(live.critic_status || 'Configure a critic model and key in Models before reviewing.');
+        if (!live.openai_key || !live.critic_ready) throw new Error(live.critic_status || 'Add your OpenAI API key for Astra in Models before reviewing.');
         if (!providerFactory) throw new Error('The live model provider is unavailable. Reload the page.');
       }
       return launch(onSave => Engine.forFinalReview(run, {providerFactory: run.mode === 'live' ? providerFactory : undefined, onSave}), true);

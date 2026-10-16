@@ -8,7 +8,7 @@ class Stopped extends Error {}
 const fail = message => { throw new ValidationError(message); };
 function auditCopy(value) {
   if (Array.isArray(value)) return value.map(auditCopy);
-  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key,item]) => [key, /authorization|api[_-]?key|access[_-]?token|auth[_-]?token|secret|^headers$|^openrouter[_-]?key$/i.test(key) ? "[redacted]" : auditCopy(item)]));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key,item]) => [key, /authorization|api[_-]?key|access[_-]?token|auth[_-]?token|secret|^headers$|^(?:openrouter|openai|tinker)[_-]?key$/i.test(key) ? "[redacted]" : auditCopy(item)]));
   return value;
 }
 function stableJSON(value) {
@@ -56,7 +56,7 @@ export class Engine {
     this.provider=this.makeProvider(providerFactory);
     if(mode==="live") {
       this.provider.preflight?.(c);
-      this.state.provenance.critic_backend="openrouter";
+      this.state.provenance.critic_backend=this.provider.criticBackend || "openai";
       if(this.provider.criticModel) this.state.provenance.critic_model=this.provider.criticModel;
     }
     this.ready=this.save();
@@ -87,7 +87,8 @@ export class Engine {
     Object.assign(engine.state,{status:"running",error:null,generation_completed:true}); engine.state.final_review ??= {status:"pending",candidate_ids:[],decisions:[],summary:null}; engine.state.requests ??=[]; engine.state.provenance ??={};
     engine.provider=engine.makeProvider(providerFactory);
     if(state.mode==="live") {
-      engine.state.provenance.final_critic_backend="openrouter";
+      engine.provider.preflightCritic?.();
+      engine.state.provenance.final_critic_backend=engine.provider.criticBackend || "openai";
       if(engine.provider.criticModel) engine.state.provenance.final_critic_model=engine.provider.criticModel;
     }
     engine.ready=engine.event("Preparing final review of saved drafts"); return engine;

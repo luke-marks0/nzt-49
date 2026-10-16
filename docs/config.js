@@ -2,13 +2,16 @@ export const AUTHORS = ["Wei Dai", "Vladimir Nesov", "Vitalik Buterin", "Vanessa
 export const FINAL_REVIEW_BATCH_SIZE = 6;
 export const SUMMARY_BATCH_SIZE = 40;
 export const FINAL_INPUT_CHARS = 120000;
+export const TINKER_API_BASE = "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1";
+export const DEFAULT_BASE_MODEL = "Qwen/Qwen3.5-9B-Base";
+export const DEFAULT_TINKER_RELAY_URL = "";
 export const DEFAULTS = {
   concept: "Super scalable spending opportunities: ways to spend huge amounts of capital (at least billions) to do good, e.g. acquiring compute or buying galaxies.",
   authors: AUTHORS, title_count: 2, title_mode: "total", branch_factor: 2, beam_width: 2,
   depth: 3, grace_depth: 2, chunk_tokens: 320, temperatures: [0.9, 1.1, 1.3],
   exploration_fraction: 0.25, seed: 42, max_calls: 250, max_output_tokens: 220000,
-  selection_mode: "guided", base_url: "https://openrouter.ai/api/v1",
-  base_model: "nvidia/nemotron-3.5-lightning:free", base_api: "openrouter", base_reasoning: "off",
+  selection_mode: "guided", base_url: TINKER_API_BASE,
+  base_model: DEFAULT_BASE_MODEL, base_api: "tinker", base_reasoning: "default",
 };
 
 export class ValidationError extends Error { constructor(message) { super(message); this.name = "ValidationError"; } }
@@ -25,7 +28,9 @@ export function validate(data = {}) {
   c.authors = [...new Set(c.authors.map(a => a.trim()))];
   const limits = {title_count: [1,200], branch_factor: [1,8], beam_width: [1,8], depth: [1,12], grace_depth: [1,3], chunk_tokens: [64,4096], seed: [0,2147483647], max_calls: [1,10000], max_output_tokens: [64,20000000]};
   for (const [key,[lo,hi]] of Object.entries(limits)) if (!Number.isInteger(c[key]) || c[key] < lo || c[key] > hi) fail(`${key} must be an integer between ${lo} and ${hi}.`);
-  for (const [key,values] of Object.entries({title_mode: ["total","per_author"], selection_mode: ["guided","random"], base_api: ["openrouter","completions","chat"], base_reasoning: ["default","off"]})) if (!values.includes(c[key])) fail(`Invalid ${key}.`);
+  // Keep historical provider settings readable in saved/imported runs. Only
+  // migrateGenerationConfig is used to prepare a new generation request.
+  for (const [key,values] of Object.entries({title_mode: ["total","per_author"], selection_mode: ["guided","random"], base_api: ["tinker","openrouter","completions","chat"], base_reasoning: ["default","off"]})) if (!values.includes(c[key])) fail(`Invalid ${key}.`);
   if (!Array.isArray(c.temperatures) || c.temperatures.length < 1 || c.temperatures.length > 20) fail("Supply 1–20 temperatures.");
   if (c.temperatures.some(t => typeof t !== "number" || !Number.isFinite(t) || t < 0 || t > 2)) fail("Temperatures must be finite numbers between 0 and 2.");
   if (typeof c.exploration_fraction !== "number" || !Number.isFinite(c.exploration_fraction) || c.exploration_fraction < 0 || c.exploration_fraction > 1) fail("Exploration fraction must be between 0 and 1.");
@@ -36,6 +41,17 @@ export function validate(data = {}) {
   if (u.protocol === "http:" && !["localhost","127.0.0.1","[::1]"].includes(u.hostname)) fail("Remote model endpoints require HTTPS; HTTP is supported for local servers.");
   if (titleTotal(c) > 200) fail("An experiment supports at most 200 titles total.");
   return c;
+}
+export function migrateGenerationConfig(data = {}) {
+  const config = validate(data);
+  if (config.base_api !== "tinker") {
+    Object.assign(config, {base_api: "tinker", base_url: TINKER_API_BASE,
+      base_model: DEFAULT_BASE_MODEL, base_reasoning: "default"});
+  }
+  if (config.base_url.replace(/\/+$/, "") !== TINKER_API_BASE) fail("New continuations must use the Tinker endpoint.");
+  config.base_url = TINKER_API_BASE;
+  config.base_reasoning = "default";
+  return config;
 }
 export const titleTotal = c => c.title_count * (c.title_mode === "per_author" ? c.authors.length : 1);
 export const assignments = c => Array.from({length: titleTotal(c)}, (_, i) => ({author: c.authors[i % c.authors.length], venue: i % 2 ? "personal blog" : "LessWrong"}));

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {Engine, pathText, exportMarkdown, select, reviewBatches} from "../docs/engine.js";
-import {DEFAULTS, validate, estimate, assignments} from "../docs/config.js";
+import {DEFAULTS, DEFAULT_BASE_MODEL, TINKER_API_BASE, validate, migrateGenerationConfig, estimate, assignments} from "../docs/config.js";
 import {DemoProvider} from "../docs/demo.js";
 
 const small = {title_count:1,branch_factor:1,depth:1};
@@ -17,9 +17,20 @@ function setup(config={},options={}) { let provider; const engine=new Engine({..
 function savedDrafts(seed,count) { const state=structuredClone(seed); state.status="completed"; state.generation_completed=true; state.final_review={status:"pending",candidate_ids:[],decisions:[],summary:null}; state.nodes=Array.from({length:count},(_,i)=>({...structuredClone(seed.nodes[0]),id:`node-${i+1}`,parent_id:null,status:"finished",text:`complete text ${i+1}`})); state.outputs=state.nodes.map(n=>n.id); state.config.max_calls=250; state.config.max_output_tokens=1000000; return state; }
 
 test("configuration preserves defaults, author assignments, and conservative budget estimates",()=>{
-  const c=validate({}); assert.equal(c.base_model,"nvidia/nemotron-3.5-lightning:free"); assert.equal(c.base_reasoning,"off"); assert.equal(estimate(c).max_calls,30); assert.equal(estimate(c).max_output_tokens,63744);
+  const c=validate({}); assert.equal(c.base_model,DEFAULT_BASE_MODEL); assert.equal(c.base_api,"tinker"); assert.equal(c.base_url,TINKER_API_BASE); assert.equal(c.base_reasoning,"default"); assert.equal(estimate(c).max_calls,30); assert.equal(estimate(c).max_output_tokens,63744);
   const requested=assignments(validate({title_count:2,title_mode:"per_author",authors:["A","B"]})); assert.equal(requested.length,4); assert.deepEqual(requested.map(x=>x.author),["A","B","A","B"]); assert.equal(requested[1].venue,"personal blog");
   c.authors.push("changed"); assert.equal(DEFAULTS.authors.length,10);
+});
+test("historical provider configuration stays readable but reusing it migrates new generation to Tinker",()=>{
+  for(const base_api of ["openrouter","completions","chat"]) {
+    const legacy={...DEFAULTS,base_api,base_url:"https://openrouter.ai/api/v1",base_model:"old/model",base_reasoning:"off",concept:"Preserved concept",seed:99};
+    assert.deepEqual(validate(legacy),legacy);
+    const migrated=migrateGenerationConfig(legacy);
+    assert.equal(migrated.base_api,"tinker"); assert.equal(migrated.base_url,TINKER_API_BASE); assert.equal(migrated.base_model,DEFAULT_BASE_MODEL); assert.equal(migrated.base_reasoning,"default");
+    assert.equal(migrated.concept,legacy.concept); assert.equal(migrated.seed,99); assert.equal(legacy.base_model,"old/model");
+  }
+  assert.equal(migrateGenerationConfig({base_model:"Qwen/Explicit-Base"}).base_model,"Qwen/Explicit-Base");
+  assert.throws(()=>migrateGenerationConfig({base_api:"tinker",base_url:"https://openrouter.ai/api/v1"}),/Tinker endpoint/);
 });
 test("configuration rejects non-finite parameters, unsafe URLs, and unexpected credential fields",()=>{
   for(const bad of [{seed:true},{temperatures:[NaN]},{depth:0},{base_url:"https://user:pass@example.com"},{base_url:"http://example.com"},{base_url:"https://example.com/?key=value"},{api_key:"private"},{title_count:200,title_mode:"per_author"}]) assert.throws(()=>validate(bad));
