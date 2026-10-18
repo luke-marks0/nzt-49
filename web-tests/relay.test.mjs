@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {handleRequest,parseAllowedOrigins,DEFAULT_ALLOWED_ORIGINS,TINKER_COMPLETIONS_URL} from "../relay/handler.js";
 import worker from "../relay/worker.js";
 
-const origin="https://nzt-49.lukemarks.bot";
+const origin="https://nzt-49.luke.enterprises";
 const key="tinker-private-fixture-key";
 const payload={model:"Qwen/Qwen3.5-9B-Base",prompt:" exact prefix \n",max_tokens:320,temperature:1.3,top_p:1};
 function request({body=payload,path="/completions",method="POST",headers={}}={}) {
@@ -21,7 +21,7 @@ test("relay forwards caller key and exact payload only to fixed Tinker HTTPS tar
 test("CORS preflight accepts only configured exact origins and declared headers",async()=>{
   for(const allowed of DEFAULT_ALLOWED_ORIGINS) { const response=await handleRequest(preflight(allowed)); assert.equal(response.status,204); assert.equal(response.headers.get("access-control-allow-origin"),allowed); assert.match(response.headers.get("access-control-allow-headers"),/Authorization/); assert.match(response.headers.get("vary"),/Origin/); }
   const custom=await handleRequest(preflight("https://preview.example"),{allowedOrigins:["https://preview.example"]}); assert.equal(custom.status,204);
-  for(const disallowed of ["https://evil.example","https://nzt-49.lukemarks.bot.evil.example","http://localhost:9999","null"]) { const response=await handleRequest(preflight(disallowed)); assert.equal(response.status,403); assert.equal(response.headers.get("access-control-allow-origin"),null); }
+  for(const disallowed of ["https://evil.example","https://nzt-49.lukemarks.bot","https://nzt-49.luke.enterprises.evil.example","http://localhost:9999","null"]) { const response=await handleRequest(preflight(disallowed)); assert.equal(response.status,403); assert.equal(response.headers.get("access-control-allow-origin"),null); }
   const badHeaders=await handleRequest(preflight(origin,"authorization,x-target-url")); assert.equal(badHeaders.status,400);
 });
 test("foreign or missing Origin cannot send credentials upstream",async()=>{

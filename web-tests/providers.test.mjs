@@ -19,12 +19,12 @@ function setup(data, options={}) {
 const response = content => ({status:'completed',incomplete_details:null,output:[{type:'reasoning',summary:[]},{type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:JSON.stringify(content)}]}],usage:{input_tokens:10,output_tokens:20}});
 
 test('API keys require HTTPS except for exact loopback development hosts', () => {
-  assert.equal(isSecurePageContext(new URL('https://nzt-49.lukemarks.bot')), true);
+  assert.equal(isSecurePageContext(new URL('https://nzt-49.luke.enterprises')), true);
   for (const host of ['localhost','127.0.0.1','[::1]']) assert.equal(isSecurePageContext(new URL('http://' + host + ':8766')), true);
-  for (const url of ['http://nzt-49.lukemarks.bot','http://localhost.evil.test','file:///index.html']) assert.equal(isSecurePageContext(new URL(url)), false);
+  for (const url of ['http://nzt-49.luke.enterprises','http://localhost.evil.test','file:///index.html']) assert.equal(isSecurePageContext(new URL(url)), false);
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'location');
   try {
-    Object.defineProperty(globalThis, 'location', {value: new URL('http://nzt-49.lukemarks.bot'), configurable: true});
+    Object.defineProperty(globalThis, 'location', {value: new URL('http://nzt-49.luke.enterprises'), configurable: true});
     assert.throws(() => setup({}), /over HTTPS/);
   } finally {
     if (previous) Object.defineProperty(globalThis, 'location', previous);

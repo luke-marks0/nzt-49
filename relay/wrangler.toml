@@ -6,7 +6,7 @@ compatibility_date = "2026-10-16"
 enabled = false
 
 [vars]
-ALLOWED_ORIGINS = "https://nzt-49.lukemarks.bot,https://luke-marks0.github.io,http://127.0.0.1:8765,http://localhost:8765,http://127.0.0.1:8766,http://localhost:8766"
+ALLOWED_ORIGINS = "https://nzt-49.luke.enterprises,https://luke-marks0.github.io,http://127.0.0.1:8765,http://localhost:8765,http://127.0.0.1:8766,http://localhost:8766"
 
 [dev]
 ip = "127.0.0.1"

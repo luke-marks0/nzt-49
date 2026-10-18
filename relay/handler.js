@@ -1,7 +1,7 @@
 // Stateless transport: credentials arrive with each request and are never saved.
 export const TINKER_COMPLETIONS_URL = "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1/completions";
 export const DEFAULT_ALLOWED_ORIGINS = Object.freeze([
-  "https://nzt-49.lukemarks.bot", "https://luke-marks0.github.io",
+  "https://nzt-49.luke.enterprises", "https://luke-marks0.github.io",
   "http://127.0.0.1:8765", "http://localhost:8765",
   "http://127.0.0.1:8766", "http://localhost:8766",
 ]);

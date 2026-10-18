@@ -2,7 +2,7 @@
 
 A browser app for exploring macrostrategy ideas through branching synthetic posts. Astra proposes diverse titles, a Tinker base model generates raw continuations, and Astra prunes branches, reviews complete drafts, and summarizes the best ideas.
 
-**App address:** https://nzt-49.lukemarks.bot/ (DNS and HTTPS setup pending).
+**App address:** https://nzt-49.luke.enterprises/ (DNS and HTTPS setup pending).
 
 ## Use
 
@@ -51,6 +51,6 @@ node relay/serve.mjs
 
 GitHub Pages publishes the `main` branch's `/docs` folder. Assets use relative paths to work at `/nzt-49/`. The `.nojekyll` file disables Jekyll processing.
 
-The dedicated domain requires a `CNAME` DNS record for `nzt-49.lukemarks.bot` pointing to `luke-marks0.github.io`. Enable HTTPS in the repository's Pages settings after GitHub issues the certificate. Live API access is disabled on public HTTP pages; loopback HTTP is supported for local development.
+In Porkbun's DNS settings for `luke.enterprises`, create a `CNAME` record with host `nzt-49` and answer `luke-marks0.github.io`. Replace any existing record at that exact host; a wildcard parking record does not configure the app subdomain. GitHub Pages uses `nzt-49.luke.enterprises` as this repository's custom domain. Enable HTTPS in the repository's Pages settings after GitHub issues the certificate. Live API access is disabled on public HTTP pages; loopback HTTP is supported for local development.
 
 API references: [Tinker raw completions](https://tinker-docs.thinkingmachines.ai/tinker/compatible-apis/openai/), [Tinker base-model example](https://tinker-docs.thinkingmachines.ai/tutorials/basics/hello-tinker/), [OpenAI Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), and [OpenAI structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses).
